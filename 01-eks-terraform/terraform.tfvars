@@ -4,11 +4,11 @@
 # My values for the Day 23 EKS lab.
 # ───────────────────────────────────────────────
 
-aws_region   = "ap-southeast-1"
+aws_region   = "us-east-1"
 project_name = "abhigna"
 
 # Bastion / Admin host — Ubuntu, m7i-flex.large, 30 GB EBS (as requested)
-bastion_ami_id           = "ami-095f155a67469a548" # Ubuntu 22.04 LTS - ap-southeast-1
+bastion_ami_id           = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS - us-east-1 (N. Virginia)
 bastion_instance_type    = "m7i-flex.large"
 bastion_root_volume_size = 30
 key_pair_name            = "abhigna-eks-key" # must already exist in your AWS account
@@ -16,7 +16,7 @@ ssh_allowed_cidr         = "0.0.0.0/0"       # restrict to your IP in production
 
 # Networking
 vpc_cidr             = "10.0.0.0/16"
-azs                  = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c"]
+azs                  = ["us-east-1a", "us-east-1b", "us-east-1c"]
 public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
 private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
 

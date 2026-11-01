@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region to deploy all resources"
   type        = string
-  default     = "ap-southeast-1"
+  default     = "us-east-1"
 }
 
 variable "project_name" {
@@ -16,7 +16,7 @@ variable "project_name" {
 variable "bastion_ami_id" {
   description = "Ubuntu 22.04 LTS AMI ID for the bastion/admin host (region-specific, update if changing region)"
   type        = string
-  default     = "ami-0532913178263be11" # Ubuntu 22.04 LTS - ap-southeast-1 (Singapore)
+  default     = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS - us-east-1 (N. Virginia)
 }
 
 variable "bastion_instance_type" {
@@ -55,7 +55,7 @@ variable "vpc_cidr" {
 variable "azs" {
   description = "Availability zones to spread the EKS cluster and subnets across"
   type        = list(string)
-  default     = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c"]
+  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
 }
 
 variable "public_subnet_cidrs" {

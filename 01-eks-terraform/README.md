@@ -38,7 +38,7 @@ One `terraform apply` creates a full EKS setup on AWS.
 ## Before you start
 
 - Terraform >= 1.5 and AWS credentials (`aws sts get-caller-identity`)
-- EC2 key pair **`abhigna-eks-key`** in **`ap-southeast-1`**
+- EC2 key pair **`abhigna-eks-key`** in **`us-east-1`** (N. Virginia)
 - Changing region? Update `aws_region`, `azs` and `bastion_ami_id` in `terraform.tfvars`
 
 ## Run
