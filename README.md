@@ -5,8 +5,8 @@ Hands-on Kubernetes projects on **AWS EKS**: cluster setup with Terraform, Helm,
 | Folder | What's inside | Status |
 |---|---|---|
 | [01-eks-terraform](./01-eks-terraform) | VPC + EKS cluster + managed node group + bastion host, built with Terraform modules | ✅ |
-| [02-helm](./02-helm) | Helm charts | Coming soon |
-| [03-argocd](./03-argocd) | Argo CD install (Helm) + GitOps apps | Coming soon |
+| [02-helm](./02-helm) | Install Helm on the bastion + Helm basics | ✅ |
+| [03-argocd](./03-argocd) | Install Argo CD into EKS with Helm (`values.yaml`, `install.sh`, `uninstall.sh`) | ✅ |
 | [manifests](./manifests) | Pods, Deployments, Services, Jobs | Coming soon |
 
 ## Tools

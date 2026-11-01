@@ -1,0 +1,10 @@
+# ───────────────────────────────────────────────
+# My settings for the argo/argo-cd Helm chart
+# All options: helm show values argo/argo-cd
+# ───────────────────────────────────────────────
+
+server:
+  service:
+    # Creates an AWS load balancer so I can open the Argo CD UI in the browser.
+    # Use ClusterIP + kubectl port-forward if you don't want a public LB.
+    type: LoadBalancer
