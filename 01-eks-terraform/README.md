@@ -44,13 +44,24 @@ One `terraform apply` creates a full EKS setup on AWS.
 ## Run
 
 ```bash
+# 💻 LAPTOP: create everything (VPC, control plane, worker nodes, bastion)
+cd 01-eks-terraform
 terraform init
 terraform plan
 terraform apply -auto-approve        # ~15–20 min
 
-ssh -i abhigna-eks-key.pem ubuntu@$(terraform output -raw bastion_public_ip)
+# 💻 LAPTOP: SSH into the bastion
+ssh -i ~/.ssh/abhigna-eks-key.pem ubuntu@$(terraform output -raw bastion_public_ip)
+
+# 🖥️ BASTION: kubectl talks to the EKS control plane (API server)
 kubectl get nodes
 ```
+
+| Part | Created by | Where it lives | I connect to it? |
+|---|---|---|---|
+| Control plane | AWS (from `module "eks"`) | AWS-owned account | Only via `kubectl` (HTTPS) |
+| Worker nodes | AWS (from my node group settings) | My VPC, private subnets | No |
+| Bastion | This code (`bastion.tf`) | My VPC, public subnet | ✅ SSH |
 
 ## Destroy
 
