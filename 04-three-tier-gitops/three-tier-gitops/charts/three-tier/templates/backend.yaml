@@ -1,0 +1,81 @@
+# ───────────────────────────────────────────────
+# Tier 2 — backend (Node.js API). Stateless → Deployment
+# Service type ClusterIP → only reachable inside the cluster (by the frontend)
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  labels:
+    {{- include "three-tier.labels" . | nindent 4 }}
+data:
+  DB_HOST: mysql          # = mysql headless Service name
+  DB_PORT: "3306"
+  DB_NAME: {{ .Values.mysql.database | quote }}
+  DB_USER: {{ .Values.mysql.user | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+      annotations:
+        # Restart pods when the config or password changes
+        checksum/config: {{ include (print $.Template.BasePath "/mysql.yaml") . | sha256sum }}
+    spec:
+      {{- include "three-tier.pullSecret" . | nindent 6 }}
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+          envFrom:
+            - configMapRef:
+                name: backend-config
+          env:
+            - name: PORT
+              value: {{ .Values.backend.port | quote }}
+            - name: APP_VERSION       # shown in the UI → you can see which tag is live
+              value: {{ .Values.backend.image.tag | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+          readinessProbe:             # traffic only when the DB is reachable
+            httpGet: { path: /api/ready, port: http }
+            periodSeconds: 5
+          livenessProbe:              # restart only if the process is stuck
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: http

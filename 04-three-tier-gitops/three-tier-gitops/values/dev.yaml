@@ -1,0 +1,20 @@
+# ───────────────────────────────────────────────
+# dev environment values (override charts/three-tier/values.yaml)
+# GitHub Actions updates ONLY the two "tag:" lines below on every build.
+# ───────────────────────────────────────────────
+
+frontend:
+  image:
+    repository: docker.io/YOUR_DOCKERHUB_USERNAME/three-tier-frontend
+    tag: v1
+  replicas: 2
+
+backend:
+  image:
+    repository: docker.io/YOUR_DOCKERHUB_USERNAME/three-tier-backend
+    tag: v1
+  replicas: 2
+
+metrics:
+  serviceMonitor:
+    enabled: false   # set true in Step 08 after installing kube-prometheus-stack

@@ -1,0 +1,21 @@
+# ───────────────────────────────────────────────
+# Step 08: tells Prometheus to scrape backend /metrics every 30s
+# Needs kube-prometheus-stack installed first (it adds the ServiceMonitor CRD)
+# ───────────────────────────────────────────────
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend
+  labels:
+    release: {{ .Values.metrics.serviceMonitor.release }}   # Prometheus only picks up monitors with this label
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+{{- end }}

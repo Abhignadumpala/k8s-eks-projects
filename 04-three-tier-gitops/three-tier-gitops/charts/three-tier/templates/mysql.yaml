@@ -1,0 +1,91 @@
+# ───────────────────────────────────────────────
+# Tier 3 — MySQL. Stateful → StatefulSet
+#   - stable pod name: mysql-0
+#   - own disk: PVC data-mysql-0 → EBS gp3 volume (via EBS CSI driver)
+#   - headless Service (clusterIP: None) → DNS name "mysql" points to the pod
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  labels:
+    {{- include "three-tier.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ .Values.mysql.password | quote }}
+  root-password: {{ .Values.mysql.rootPassword | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  clusterIP: None          # headless
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: {{ .Values.mysql.image }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MYSQL_DATABASE
+              value: {{ .Values.mysql.database | quote }}
+            - name: MYSQL_USER
+              value: {{ .Values.mysql.user | quote }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: mysql-secret, key: password }
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: mysql-secret, key: root-password }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+              subPath: mysql      # EBS disk has a lost+found folder; MySQL needs an empty dir
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\""]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: mysql }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.mysql.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storageClass.name }}
+        resources:
+          requests:
+            storage: {{ .Values.mysql.storage.size }}

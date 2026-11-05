@@ -1,0 +1,17 @@
+# ───────────────────────────────────────────────
+# Step 08: my settings for the prometheus-community/kube-prometheus-stack chart
+# Install (bastion):
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace -f values.yaml
+# ───────────────────────────────────────────────
+
+grafana:
+  adminPassword: admin123        # lab only
+  service:
+    type: LoadBalancer           # open Grafana from the laptop browser
+
+prometheus:
+  prometheusSpec:
+    retention: 2d                # keep 2 days of metrics (lab)
+    # Only scrape ServiceMonitors that carry label release=kube-prometheus-stack
+    serviceMonitorSelectorNilUsesHelmValues: true

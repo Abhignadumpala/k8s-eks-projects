@@ -20,6 +20,7 @@ One `terraform apply` creates a full EKS setup on AWS.
 | EKS cluster | `abhigna-cluster`, Kubernetes 1.33 (`terraform-aws-modules/eks/aws`) |
 | Managed node group | `m7i-flex.large`, 2 nodes, scales 2–6, in private subnets |
 | IAM OIDC provider | IRSA, so pods can use IAM roles |
+| EBS CSI driver add-on | Lets PVCs create EBS volumes (MySQL StatefulSet in 04) |
 | Bastion EC2 | Ubuntu, auto-installs AWS CLI, kubectl, eksctl, helm and sets up kubeconfig |
 
 ## Files

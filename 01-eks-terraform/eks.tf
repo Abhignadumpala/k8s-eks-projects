@@ -30,6 +30,14 @@ module "eks" {
   # Equivalent to: eksctl utils associate-iam-oidc-provider --approve
   enable_irsa = true
 
+  # EBS CSI driver: lets PVCs create EBS volumes (needed for the MySQL StatefulSet
+  # in 04-three-tier-gitops). Node role below has AmazonEBSCSIDriverPolicy.
+  cluster_addons = {
+    aws-ebs-csi-driver = {
+      most_recent = true
+    }
+  }
+
   eks_managed_node_group_defaults = {
     ami_type = "AL2023_x86_64_STANDARD"
   }
@@ -64,6 +72,7 @@ module "eks" {
         AmazonEC2ContainerRegistryReadOnly   = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
         ElasticLoadBalancingFullAccess       = "arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess"
         AutoScalingFullAccess                = "arn:aws:iam::aws:policy/AutoScalingFullAccess"
+        AmazonEBSCSIDriverPolicy             = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
       }
 
       labels = {

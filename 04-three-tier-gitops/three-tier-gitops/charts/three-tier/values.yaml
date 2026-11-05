@@ -1,0 +1,58 @@
+# ───────────────────────────────────────────────
+# Default values for the three-tier chart.
+# Per-environment overrides live in ../../values/<env>.yaml
+# (CI only changes the image tags there).
+# ───────────────────────────────────────────────
+
+frontend:
+  image:
+    repository: docker.io/YOUR_DOCKERHUB_USERNAME/three-tier-frontend
+    tag: v1
+  replicas: 2
+  service:
+    type: LoadBalancer   # public entry point (AWS creates a load balancer)
+    port: 80
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 200m, memory: 128Mi }
+
+backend:
+  image:
+    repository: docker.io/YOUR_DOCKERHUB_USERNAME/three-tier-backend
+    tag: v1
+  replicas: 2
+  port: 8080
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+mysql:
+  image: mysql:8.0
+  database: tasksdb
+  user: appuser
+  # Lab only: plain passwords in Git are NOT safe for real projects.
+  # Real setups use Sealed Secrets / External Secrets + AWS Secrets Manager.
+  password: apppass
+  rootPassword: rootpass
+  storage:
+    size: 5Gi
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits:   { cpu: "1", memory: 1Gi }
+
+# EKS 1.30+ has no default StorageClass, so the chart creates a gp3 one.
+# Set create: false if a "gp3" StorageClass already exists in the cluster.
+storageClass:
+  create: true
+  name: gp3
+
+# Private Docker Hub repo? Create the secret and put its name here:
+#   kubectl create secret docker-registry dockerhub -n three-tier \
+#     --docker-username=<user> --docker-password=<token>
+imagePullSecret: ""
+
+# Step 08: let Prometheus (kube-prometheus-stack) scrape backend /metrics
+metrics:
+  serviceMonitor:
+    enabled: false
+    release: kube-prometheus-stack   # must match the Helm release name of the stack

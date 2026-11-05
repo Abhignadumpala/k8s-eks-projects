@@ -1,0 +1,10 @@
+3-tier app deployed to namespace {{ .Release.Namespace }}.
+
+  frontend: {{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}
+  backend:  {{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}
+
+Get the public URL (wait 2-3 min for the load balancer):
+  kubectl get svc frontend -n {{ .Release.Namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+
+Watch pods:
+  kubectl get pods -n {{ .Release.Namespace }} -w

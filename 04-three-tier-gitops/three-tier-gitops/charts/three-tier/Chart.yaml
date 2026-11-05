@@ -1,0 +1,6 @@
+apiVersion: v2
+name: three-tier
+description: 3-tier app (nginx frontend → Node.js backend → MySQL) for EKS
+type: application
+version: 0.1.0        # chart version: bump when templates change
+appVersion: "1.0.0"   # app version (image tags are set in values/<env>.yaml)

@@ -1,0 +1,30 @@
+# ───────────────────────────────────────────────
+# Argo CD Application: "watch this Git path and keep the cluster the same"
+# Apply once (Step 05):  kubectl apply -f argocd/three-tier-dev.yaml
+# ───────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: three-tier-dev
+  namespace: argocd                 # Applications always live in the argocd namespace
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Abhignadumpala/three-tier-gitops.git
+    targetRevision: main
+    path: charts/three-tier         # the Helm chart
+    helm:
+      valueFiles:
+        - ../../values/dev.yaml     # env values (CI updates the image tags here)
+
+  destination:
+    server: https://kubernetes.default.svc   # = the same cluster Argo CD runs in
+    namespace: three-tier
+
+  syncPolicy:
+    automated:
+      prune: true       # delete objects that were removed from Git
+      selfHeal: true    # undo manual kubectl changes (Git wins)
+    syncOptions:
+      - CreateNamespace=true

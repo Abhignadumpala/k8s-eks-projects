@@ -1,0 +1,28 @@
+# ───────────────────────────────────────────────
+# nginx config (template). At container start, the nginx image replaces
+# ${BACKEND_URL} with the env var value and writes /etc/nginx/conf.d/default.conf
+#   docker compose: BACKEND_URL=http://backend:8080
+#   Kubernetes:     BACKEND_URL=http://backend:8080  (backend Service name)
+# ───────────────────────────────────────────────
+server {
+    listen 80;
+
+    # Tier 1: static files
+    location / {
+        root  /usr/share/nginx/html;
+        index index.html;
+    }
+
+    # Tier 1 → Tier 2: forward API calls to the backend
+    location /api/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Used by Kubernetes probes
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+    }
+}
