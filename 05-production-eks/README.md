@@ -1,215 +1,357 @@
-# 05 — Production-Grade Secure EKS Project
+# Production-Grade EKS Project (Beginner Friendly, Step by Step)
 
-Build **one real project** that uses everything from the Kubernetes notes Day 29 → Day 38: a 3-tier app (frontend → backend → MySQL) on EKS, set up the way a company runs it in production.
+Build a **production-style Kubernetes cluster on AWS (EKS)** and deploy a 3-tier app on it: **frontend → backend → MySQL**.
+Every step explains **what** you are doing and **why**, so you can follow it even if this is your first EKS project.
 
 ## About this project
 
 | Item | Value |
 |---|---|
-| Goal | Take a plain EKS cluster and make it **production-grade**: HA, secure, observable, automated |
-| App | frontend (nginx) → backend (Node.js) → MySQL (reused from [04-three-tier-gitops](../04-three-tier-gitops)) |
-| Cluster | `abhigna-prod`, EKS **1.36**, `us-east-1`, 3 AZs |
-| Infra tool | Terraform (copied from [01-eks-terraform](../01-eks-terraform) and upgraded) |
-| Who builds it | Me, step by step. Every step ends with a ✅ Check |
+| Goal | Go from a basic EKS cluster to a **production-grade** one: highly available, secure, monitored, automated |
+| App | frontend (nginx) → backend (Node.js API) → MySQL database |
+| Cloud | AWS, region `us-east-1` (N. Virginia), spread across 3 Availability Zones |
+| Kubernetes | Amazon EKS, version **1.36** |
+| Infra tool | Terraform (infrastructure as code) |
+| Level | Beginner → intermediate. You should know basic Linux commands and what a container is |
+| Cost | About **$0.63 per hour** while the cluster is running. Destroy it when you stop (Step 12) |
 
-## The 12 steps (and which notes each uses)
+## The roadmap (12 steps)
 
-| # | Step | What I do | Notes it uses | Status |
-|---|---|---|---|---|
-| 01 | **Infrastructure** | Terraform: VPC, EKS 1.36, system + app node groups, Pod Identity agent, EBS CSI, ECR | Day 23, 26, 36, 38 | ⬜ |
-| 02 | Secure images | Build, scan with Trivy, sign with Cosign, push to ECR | Day 32, 38 | ⬜ |
-| 03 | RBAC + ServiceAccounts | dev/ops users, one ServiceAccount per app, `kubectl auth can-i` | Day 30, 31 | ⬜ |
-| 04 | Pod hardening | securityContext (non-root, drop ALL), Pod Security Standards | Day 31 | ⬜ |
-| 05 | Pod Identity | Backend reads the DB password from Secrets Manager, no keys | Day 36 | ⬜ |
-| 06 | Kyverno | ECR only, no `:latest`, no static keys, signed images (Audit → Deny) | Day 36 | ⬜ |
-| 07 | Istio | mTLS STRICT + AuthorizationPolicy (frontend → backend → db only) | Day 35 | ⬜ |
-| 08 | High availability | Probes, HPA, PDB, topology spread, PriorityClass | Day 24, 34, 38 | ⬜ |
-| 09 | GitOps + canary | Helm + Argo CD, Argo Rollouts canary, rollback | Day 23, 29 | ⬜ |
-| 10 | Observability | Prometheus + Grafana, OpenTelemetry → Jaeger | Day 27, 33 | ⬜ |
-| 11 | Break & fix | CrashLoopBackOff, ImagePullBackOff, OOMKilled, 502/503, Pending | Day 37 | ⬜ |
-| 12 | Destroy | `terraform destroy`, add to resume log | Cost control | ⬜ |
+| # | Step | What you do | Topic you learn |
+|---|---|---|---|
+| 01 | **Infrastructure** | Create the network, EKS cluster, worker nodes and image registry with Terraform | VPC, EKS, node groups, taints, add-ons |
+| 02 | Secure images | Build images, scan them, sign them, push to ECR | Supply chain security (Trivy, Cosign) |
+| 03 | RBAC + ServiceAccounts | Give people and apps only the permissions they need | RBAC, ServiceAccounts |
+| 04 | Pod hardening | Run containers as non-root with minimal privileges | securityContext, Pod Security Standards |
+| 05 | Pod Identity | Backend reads the DB password from AWS Secrets Manager, with no keys in code | EKS Pod Identity |
+| 06 | Policy guardrails | Block images not from ECR, `:latest` tags, hard-coded keys, unsigned images | Kyverno |
+| 07 | Service mesh | Encrypt traffic between services and allow only frontend → backend → db | Istio mTLS |
+| 08 | High availability | App keeps running when a Pod, a node or a whole AZ fails | Probes, HPA, PDB, topology spread |
+| 09 | GitOps + canary | Git push → Argo CD deploys → new version goes to 10% of users first | Argo CD, Argo Rollouts |
+| 10 | Observability | Metrics, dashboards and request tracing | Prometheus, Grafana, OpenTelemetry |
+| 11 | Break & fix | Break the app on purpose and fix it | CrashLoopBackOff, ImagePullBackOff, 502/503 |
+| 12 | Clean up | Delete everything so you stop paying | `terraform destroy` |
 
-> Only Step 01 is written out below. Each next step gets added here when I reach it.
+> Step 01 is below. The next steps are added to this guide one by one.
 
 ## Where each command runs
 
+You use **two machines**:
+
 ```
-💻 Laptop  : terraform, aws cli, git, docker
-     │ ssh (abhigna-eks-key.pem)
-     ▼
-🖥️ Bastion : kubectl, helm  ──────►  ☸️ EKS cluster abhigna-prod
+💻 Your laptop
+   │  terraform, aws cli   → creates everything in AWS
+   │
+   │  ssh (with your .pem key)
+   ▼
+🖥️ Bastion (a small EC2 created by Terraform)
+   │  kubectl, helm        → already installed for you
+   ▼
+☸️ EKS cluster
 ```
+
+| Where | What runs there |
+|---|---|
+| 💻 Laptop | `terraform`, `aws`, `git`, `docker` |
+| 🖥️ Bastion | `kubectl`, `helm` (it has access to the cluster) |
 
 ---
 
 # Step 01 — Infrastructure
 
-## Concepts
+## What you will build in this step
 
-### Why do we need infrastructure first?
+```
+                         AWS region us-east-1
+ ┌─────────────────────────── VPC 10.0.0.0/16 ───────────────────────────┐
+ │                                                                        │
+ │   AZ us-east-1a          AZ us-east-1b          AZ us-east-1c          │
+ │  ┌──────────────┐       ┌──────────────┐       ┌──────────────┐        │
+ │  │ public subnet│       │ public subnet│       │ public subnet│        │
+ │  │ bastion, NAT │       │ (load        │       │ (load        │        │
+ │  │              │       │  balancers)  │       │  balancers)  │        │
+ │  └──────────────┘       └──────────────┘       └──────────────┘        │
+ │  ┌──────────────┐       ┌──────────────┐       ┌──────────────┐        │
+ │  │private subnet│       │private subnet│       │private subnet│        │
+ │  │ worker nodes │       │ worker nodes │       │ worker nodes │        │
+ │  └──────────────┘       └──────────────┘       └──────────────┘        │
+ └────────────────────────────────────────────────────────────────────────┘
+        + EKS control plane (run by AWS)   + 2 ECR repositories
+```
 
-Kubernetes is only the **manager** of containers. It needs machines to run on. On AWS that means:
+## Concepts (read this first)
 
-| Piece | What it is | Simple meaning |
+### The pieces, in simple words
+
+| Piece | What it is | Think of it as |
 |---|---|---|
-| **VPC** | Your private network in AWS | The "building" everything lives in |
-| **Public subnets** | Parts of the VPC that reach the internet | The "front door": load balancers, bastion, NAT |
-| **Private subnets** | Parts with no direct internet access | The "back rooms": worker nodes live here, safe |
-| **NAT gateway** | Lets private machines go **out** to the internet | Nodes can download images, but nobody can come **in** |
-| **EKS control plane** | API server, etcd, scheduler, run by AWS | The "brain" (AWS manages it, we pay $0.10/hr) |
-| **Worker nodes** | EC2 machines that run our Pods | The "hands" |
-| **Bastion** | A small EC2 in the public subnet with kubectl/helm | My "jump box" to talk to the cluster |
-| **ECR** | AWS's private image registry | Where my Docker images will be stored |
+| **VPC** | Your own private network inside AWS | The building everything lives in |
+| **Availability Zone (AZ)** | A separate data center inside a region | Different floors of the building: if one floor loses power, the others keep working |
+| **Public subnet** | Part of the VPC that can talk to the internet | The front door: load balancers and the bastion |
+| **Private subnet** | Part of the VPC with no direct internet access | Back rooms: worker nodes live here, safe from the internet |
+| **NAT gateway** | Lets private machines go **out** to the internet | Nodes can download images, but nobody outside can come **in** |
+| **EKS control plane** | The Kubernetes "brain" (API server, etcd, scheduler), run by AWS | The manager. AWS takes care of it; you pay $0.10/hour |
+| **Worker nodes** | EC2 machines where your Pods actually run | The workers |
+| **Node group** | A group of identical worker nodes managed together | A team of workers with the same job |
+| **Bastion** | A small EC2 in the public subnet with `kubectl` and `helm` | Your jump box to reach the cluster |
+| **ECR** | Elastic Container Registry: AWS's private image storage | Your private Docker Hub |
+| **Add-on** | Extra software that EKS installs and upgrades for you | Plug-ins for the cluster |
 
-### Why Terraform and not clicking in the console?
+### What is Terraform, and why use it?
 
-| Console (clicking) | Terraform (code) |
+**Terraform** = a tool where you **write your infrastructure as code** (`.tf` files) and Terraform creates it in AWS for you.
+
+| Clicking in the AWS console | Terraform |
 |---|---|
-| Hard to repeat exactly | `terraform apply` builds the same thing every time |
-| No history | Code is in Git: every change is reviewed and saved |
-| Deleting = clicking 30 things | `terraform destroy` removes everything → no surprise bill |
+| Hard to repeat exactly the same way | `terraform apply` builds the same thing every time |
+| No history of what changed | Code lives in Git: every change is saved and reviewed |
+| Deleting = clicking 30 screens, easy to forget something | `terraform destroy` deletes everything, so no surprise bill |
 
-### Why copy `01-eks-terraform` instead of starting from zero?
+The 4 Terraform commands you will use:
 
-`01-eks-terraform` (Day 23) already builds a **working** VPC + EKS + bastion. A basic cluster is not production-grade, so I copy it and **upgrade** it. This is exactly how real teams work: start from a known-good base, then improve.
+| Command | What it does | Costs money? |
+|---|---|---|
+| `terraform init` | Downloads the plugins and modules the code needs | No |
+| `terraform validate` | Checks the code for mistakes | No |
+| `terraform plan` | Shows what **would** be created (a preview) | No |
+| `terraform apply` | Actually creates everything in AWS | **Yes** |
 
-### What changes from Day 23 → production (and why)
+### Basic cluster vs production cluster
 
-| # | Change | Day 23 (basic) | Now (production) | Why — from my notes |
+This project starts from a **basic, working** Terraform setup ([01-eks-terraform](../01-eks-terraform)) and upgrades it. Here is what changes and why:
+
+| # | Topic | Basic setup | Production setup | Why it matters |
 |---|---|---|---|---|
-| 1 | **EKS version** | 1.33 | **1.36** | 1.33 is in *extended support* = **$0.60/hr instead of $0.10/hr** (6× cost). Always stay on a standard-support version |
-| 2 | **Names** | `abhigna-cluster` | `abhigna-prod` | New cluster, so it never clashes with the old lab |
-| 3 | **kubectl on bastion** | v1.35 | v1.36 | kubectl must be within ±1 minor version of the cluster |
-| 4 | **Node groups** | 1 group for everything | **system** + **app** | Day 38: add-ons (Argo CD, Kyverno, Prometheus) can't steal CPU/RAM from the app, and the reverse |
-| 5 | **Taint on app nodes** | none | `workload=app:NoSchedule` | Day 26: only Pods with a matching toleration land on app nodes |
-| 6 | **Pod Identity agent** | not installed | installed as add-on | Day 36: lets Pods get **temporary** AWS credentials (used in Step 05) |
-| 7 | **IMDS hop limit** | default | **1** | Day 36 *node role trap*: a Pod can't reach the node's metadata and steal the node's IAM role |
-| 8 | **Node access** | SSH key on nodes | **SSM** (`AmazonSSMManagedInstanceCore`) | No open SSH port, no key to leak; still lets me log in for `crictl` (Day 37) |
-| 9 | **Node IAM** | many `FullAccess` policies | only what's needed | Least privilege (Day 38, 4C's Cloud layer) |
-| 10 | **ECR repos** | Docker Hub | 2 ECR repos, **IMMUTABLE**, scan on push | Day 36 Kyverno: only ECR images, a tag can never be overwritten (no `:latest` tricks) |
+| 1 | **EKS version** | 1.33 | **1.36** | Old versions go into *extended support* and the control plane costs **$0.60/hr instead of $0.10/hr** (6×) |
+| 2 | **Cluster name** | `abhigna-cluster` | `abhigna-prod` | A new name, so it never clashes with an older cluster |
+| 3 | **kubectl version** | 1.35 | 1.36 | `kubectl` should match the cluster version (±1 is allowed) |
+| 4 | **Node groups** | 1 group runs everything | **system** group + **app** group | Cluster tools (monitoring, Argo CD) can't steal CPU/RAM from your app, and the other way round |
+| 5 | **Taint on app nodes** | none | `workload=app:NoSchedule` | A "keep out" sign: only app Pods are allowed on app nodes |
+| 6 | **Pod Identity agent** | not installed | installed | Lets Pods get **temporary** AWS access instead of storing access keys (used in Step 05) |
+| 7 | **Instance metadata (IMDS)** | default | IMDSv2, hop limit **1** | Stops a Pod from secretly using the node's AWS permissions |
+| 8 | **Logging in to nodes** | SSH key | **SSM Session Manager** | No open SSH port and no key that can leak |
+| 9 | **Node permissions** | many `FullAccess` policies | only what is needed | *Least privilege*: if a node is hacked, the attacker gets very little |
+| 10 | **Image registry** | Docker Hub | **ECR**, immutable tags, scan on push | Images stay in your own AWS account and are scanned for vulnerabilities |
 
-### System vs app node groups (picture)
+### System vs app node groups
 
 ```
-                 EKS cluster abhigna-prod
-   ┌────────────────────────────┬──────────────────────────────┐
-   │ system node group (2)      │ app node group (2)           │
-   │ label role=system          │ label role=app               │
-   │ no taint                   │ taint workload=app:NoSchedule│
-   │                            │                              │
-   │ CoreDNS, Argo CD, Kyverno, │ frontend, backend, mysql     │
-   │ Prometheus, Istio          │ (they have the toleration)   │
-   └────────────────────────────┴──────────────────────────────┘
+                    EKS cluster abhigna-prod
+   ┌─────────────────────────────┬────────────────────────────────┐
+   │ SYSTEM node group (2 nodes) │ APP node group (2 nodes)       │
+   │ label: role=system          │ label: role=app                │
+   │ no taint                    │ taint: workload=app:NoSchedule │
+   │                             │                                │
+   │ CoreDNS, Argo CD, Kyverno,  │ frontend, backend, mysql       │
+   │ Prometheus, Istio           │ (only Pods with a matching     │
+   │                             │  "toleration" can come here)   │
+   └─────────────────────────────┴────────────────────────────────┘
 ```
 
-> **Interview one-liner:** "I split nodes into a system group for cluster add-ons and a tainted app group for workloads, so a noisy add-on can never starve the application."
+| Word | Meaning |
+|---|---|
+| **Label** | A tag on a node, like `role=app`. Used to find or select nodes |
+| **Taint** | A "keep out" rule on a node. Pods are refused unless they have a matching **toleration** |
+| **Toleration** | A "pass" in the Pod's YAML that lets it ignore a taint |
+
+### What is IMDS and why hop limit 1?
+
+**IMDS (Instance Metadata Service)** = a special address (`169.254.169.254`) every EC2 machine can call to get information about itself, **including temporary AWS credentials of the node's IAM role**.
+
+The problem: a Pod running on the node can call the same address and **borrow the node's permissions**.
+
+```
+hop limit 2 (risky):  Pod ──► node ──► IMDS  ✅ answer reaches the Pod
+hop limit 1 (safe):   Pod ──► node ──► IMDS  ❌ answer stops at the node
+```
+
+> **Interview one-liner:** "I set the IMDS hop limit to 1 so Pods can't use the node's IAM role. Pods get AWS access only through Pod Identity, each with its own role."
+
+---
+
+## Before you start
+
+### Tools on your laptop
+
+| Tool | Check command | Install guide |
+|---|---|---|
+| AWS CLI v2 | `aws --version` | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html |
+| Terraform ≥ 1.5 | `terraform -version` | https://developer.hashicorp.com/terraform/install |
+| Git | `git --version` | https://git-scm.com/downloads |
+
+### AWS access
+
+You need an AWS account and an IAM user with admin permissions (for learning).
+Connect the AWS CLI to your account:
+
+```bash
+aws configure
+```
+
+> It asks for your Access Key ID, Secret Access Key, region (`us-east-1`) and output format (`json`).
+
+Check that it works:
+
+```bash
+aws sts get-caller-identity
+```
+
+> You should see your account number and user name. If you get an error, the CLI is not connected yet.
 
 ---
 
 ## Lab
 
-### 1.1 Create the EC2 key pair — ✅ DONE
+### 1.1 Create an EC2 key pair
 
-**What:** an SSH key pair. AWS keeps the public half, I keep the private half (`.pem`).
-**Why:** the bastion is created with this key, so I can `ssh` into it.
+**What:** a key pair is like a lock and key. AWS keeps the **lock** (public key) and you keep the **key** (private key, a `.pem` file).
+**Why:** the bastion is created with this lock, so only you (with the key) can `ssh` into it.
 
 ```bash
 aws ec2 create-key-pair --key-name abhigna-eks-key --region us-east-1 --query 'KeyMaterial' --output text > ~/.ssh/abhigna-eks-key.pem
 ```
 
+> You can use any name instead of `abhigna-eks-key`. If you do, use the same name in `terraform.tfvars` (`key_pair_name`) in step 1.3.
+
 ```bash
 chmod 400 ~/.ssh/abhigna-eks-key.pem
 ```
 
-> `chmod 400` = only I can read it. `ssh` refuses a key that others can read. AWS shows the private key **only once**, never delete this file.
+> `chmod 400` = only you can read the file. `ssh` refuses a key file that other users can read.
+
+**✅ Check:**
+
+```bash
+head -1 ~/.ssh/abhigna-eks-key.pem
+```
+
+> Shows `-----BEGIN RSA PRIVATE KEY-----`
+
+```bash
+aws ec2 describe-key-pairs --region us-east-1 --key-names abhigna-eks-key --query 'KeyPairs[].KeyName' --output text
+```
+
+> Shows `abhigna-eks-key`
+
+⚠️ AWS shows the private key **only once**. If you delete the `.pem` file, you have to create a new key pair. Never push it to GitHub.
 
 ---
 
-### 1.2 Copy the Day 23 Terraform — ✅ DONE
+### 1.2 Get the starting Terraform code
 
-**What:** make a copy of the working Terraform into this project.
-**Why:** keep `01-eks-terraform` untouched (it's my Day 23 reference) and upgrade the copy.
+**What:** download this repository and make a copy of the basic EKS Terraform setup.
+**Why:** you start from code that already works, and keep the original untouched so you can compare "basic" vs "production" later.
 
 ```bash
-mkdir -p ~/k8s-eks-projects/05-production-eks
+git clone https://github.com/Abhignadumpala/k8s-eks-projects.git
 ```
 
 ```bash
-cp -r ~/k8s-eks-projects/01-eks-terraform ~/k8s-eks-projects/05-production-eks/terraform
+cd k8s-eks-projects
 ```
 
 ```bash
-cd ~/k8s-eks-projects/05-production-eks/terraform
+mkdir -p 05-production-eks
 ```
 
-What I copied, file by file:
+```bash
+cp -r 01-eks-terraform 05-production-eks/terraform
+```
 
-| File | What it creates |
+```bash
+cd 05-production-eks/terraform
+```
+
+```bash
+ls
+```
+
+What each file does:
+
+| File | What it does |
 |---|---|
-| `providers.tf` | Tells Terraform to use AWS (and Kubernetes) and which region |
-| `variables.tf` | The list of settings (names, sizes, CIDRs) with defaults |
-| `terraform.tfvars` | **My values** for those settings (the only file I edit for names/versions) |
-| `vpc.tf` | VPC, 3 public + 3 private subnets, NAT gateway |
-| `eks.tf` | EKS control plane + worker node groups + add-ons |
-| `bastion.tf` | Bastion EC2, its security group and IAM role |
-| `bastion_bootstrap.sh.tpl` | Script that runs on the bastion's first boot: installs aws cli, kubectl, helm, sets kubeconfig |
-| `outputs.tf` | Values printed after `apply` (cluster name, bastion IP, ssh command) |
+| `providers.tf` | Tells Terraform "we are using AWS, in this region" |
+| `variables.tf` | The list of settings (names, sizes, network ranges) with default values |
+| `terraform.tfvars` | **Your values** for those settings. This is the main file you edit |
+| `vpc.tf` | Creates the VPC, 3 public + 3 private subnets and the NAT gateway |
+| `eks.tf` | Creates the EKS cluster, worker node groups and add-ons |
+| `bastion.tf` | Creates the bastion EC2, its firewall (security group) and its IAM role |
+| `bastion_bootstrap.sh.tpl` | A script that runs on the bastion's first boot: installs `aws`, `kubectl`, `helm` and connects to the cluster |
+| `outputs.tf` | Values printed at the end of `apply` (cluster name, bastion IP, ssh command) |
+
+> The code uses ready-made **Terraform modules** for the VPC and EKS. A module = a reusable package of Terraform code, so you don't write 500 lines yourself.
 
 ---
 
-### 1.3 (a) `terraform.tfvars` — new names and version
+### 1.3 Upgrade the code to production
+
+You will edit 4 files and create 1 new one. `nano` is a simple text editor: save with `Ctrl+O` → `Enter`, exit with `Ctrl+X`.
+
+#### (a) `terraform.tfvars`: name and version
 
 **What:** change 3 values.
-**Why:** a new cluster name (no clash with the old lab) and a version in standard support (cheaper).
+**Why:** give the new cluster its own name, and use a Kubernetes version that is in standard (cheaper) support.
 
 ```bash
 nano terraform.tfvars
 ```
 
-| Find | Change to | Why |
+| Find this line | Change it to | Why |
 |---|---|---|
-| `project_name = "abhigna"` | `project_name = "abhigna-prod"` | Prefix for VPC and tags |
-| `cluster_name    = "abhigna-cluster"` | `cluster_name    = "abhigna-prod"` | New cluster name |
-| `cluster_version = "1.33"` | `cluster_version = "1.36"` | 1.33 = extended support = 6× price |
+| `project_name = "abhigna"` | `project_name = "abhigna-prod"` | Used as a prefix for the VPC name and tags |
+| `cluster_name    = "abhigna-cluster"` | `cluster_name    = "abhigna-prod"` | The new cluster's name |
+| `cluster_version = "1.33"` | `cluster_version = "1.36"` | 1.33 is in extended support (6× the price) |
 
-> Leave the `nodegroup_name` / `node_*` lines. They are not used any more, and Terraform does not complain about unused values.
+> Leave the `nodegroup_name` and `node_*` lines as they are. They are no longer used, and Terraform does not complain about unused values.
 
-How to check which versions are cheap (standard support):
+To see which versions are in standard support (cheap) right now:
 
 ```bash
 aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text
 ```
 
----
+> Pick a version that says `STANDARD_SUPPORT`, never `EXTENDED_SUPPORT`.
 
-### 1.3 (b) `bastion_bootstrap.sh.tpl` — kubectl version
+**Optional but safer:** allow SSH to the bastion only from your own IP. Find your IP:
 
-**What:** install kubectl v1.36 on the bastion.
-**Why:** kubectl and the cluster should be the same minor version (±1 allowed).
+```bash
+curl -s ifconfig.me
+```
+
+> Then in `terraform.tfvars` set `ssh_allowed_cidr = "<your-ip>/32"` instead of `"0.0.0.0/0"` (which means "the whole internet").
+
+#### (b) `bastion_bootstrap.sh.tpl`: kubectl version
+
+**What:** make the bastion install `kubectl` 1.36.
+**Why:** `kubectl` should match the cluster version. A big gap can cause errors.
 
 ```bash
 sed -i 's#v1.35.0/bin#v1.36.0/bin#' bastion_bootstrap.sh.tpl
 ```
 
+> `sed -i 's#old#new#' file` = find `old` and replace it with `new` inside the file.
+
+**✅ Check:**
+
 ```bash
 grep -n "dl.k8s.io" bastion_bootstrap.sh.tpl
 ```
 
-> `sed -i 's#old#new#'` = find and replace inside the file. The grep line should now show `v1.36.0`.
+> The line should now contain `v1.36.0`.
 
----
+#### (c) `eks.tf`: add-ons and two node groups (the main change)
 
-### 1.3 (c) `eks.tf` — add-ons and two node groups (the main change)
+**What:** replace the single node group with a **system** and an **app** node group, and add the Pod Identity add-on.
+**Why:** this is what makes the cluster production-style (see the Concepts table above).
 
 ```bash
 nano eks.tf
 ```
 
-**Delete** everything from the line `cluster_addons = {` down to the closing `}` of `eks_managed_node_groups` (the old `abhigna-cluster-ng-1` block with `remote_access` and the `FullAccess` policies).
-
-**Keep** everything above it (`cluster_name`, `access_entries`, `vpc_id`, `enable_irsa`) and below it (`cluster_security_group_additional_rules`, `kubernetes_cluster_role_binding`).
-
-**Paste** this in the same place:
+1. **Find** the line that starts with `cluster_addons = {`.
+2. **Delete** from that line down to the closing `}` of the `eks_managed_node_groups` block. This removes the old node group (named `abhigna-cluster-ng-1`) with its `remote_access` and `FullAccess` policies.
+3. **Keep** everything above it (`cluster_name`, `access_entries`, `vpc_id`, `enable_irsa`) and everything below it (`cluster_security_group_additional_rules` and the `kubernetes_cluster_role_binding` resource).
+4. **Paste** this in the empty space:
 
 ```hcl
   cluster_addons = {
@@ -250,40 +392,43 @@ nano eks.tf
   }
 ```
 
-**Line by line:**
+**What each line means:**
 
 | Line | Meaning |
 |---|---|
-| `cluster_addons` | EKS add-ons that AWS installs and upgrades for me |
-| `eks-pod-identity-agent` | DaemonSet that hands out temporary AWS credentials to Pods (Day 36) |
-| `before_compute = true` | Install it **before** nodes join, so every node has it from the start |
-| `aws-ebs-csi-driver` | Creates EBS disks when a PVC asks for storage (MySQL needs this) |
-| `eks_managed_node_group_defaults` | Settings shared by **both** node groups (written once) |
-| `ami_type = "AL2023_x86_64_STANDARD"` | Amazon Linux 2023 OS for the nodes |
-| `instance_types = ["m7i-flex.large"]` | 2 vCPU, 8 GB RAM per node |
-| `http_tokens = "required"` | IMDSv2 only (needs a session token, safer than v1) |
-| `http_put_response_hop_limit = 1` | Metadata answer can't travel 1 extra hop into a Pod → Pods can't use the node's role |
-| `AmazonSSMManagedInstanceCore` | Lets me log in to nodes with SSM Session Manager, no SSH |
-| `AmazonEBSCSIDriverPolicy` | Lets the EBS CSI driver create disks. *For now on the node role; in Step 05 I move it to Pod Identity* |
-| `system = { ... }` | Node group for add-ons, 2 nodes (can grow to 4) |
-| `labels = { role = "system" }` | Label on the nodes → `kubectl get nodes -L role` shows it |
-| `app = { ... }` | Node group for my app, 2 nodes |
-| `taints = { ... NO_SCHEDULE }` | "Keep out" sign: only Pods with a matching toleration can be scheduled here |
+| `cluster_addons` | Add-ons that EKS installs and keeps updated for you |
+| `eks-pod-identity-agent` | Runs on every node and hands out **temporary** AWS credentials to Pods |
+| `before_compute = true` | Install it **before** the nodes start, so every node has it from minute one |
+| `aws-ebs-csi-driver` | Creates an EBS disk when a Pod asks for storage. MySQL needs this to save data |
+| `eks_managed_node_group_defaults` | Settings shared by **both** node groups, written once |
+| `ami_type = "AL2023_x86_64_STANDARD"` | The operating system of the nodes: Amazon Linux 2023 |
+| `instance_types = ["m7i-flex.large"]` | Machine size: 2 vCPU, 8 GB RAM per node |
+| `http_tokens = "required"` | Use IMDSv2 only (requires a session token, safer than v1) |
+| `http_put_response_hop_limit = 1` | The metadata answer can't reach Pods (see "What is IMDS" above) |
+| `AmazonSSMManagedInstanceCore` | Lets you log in to a node through AWS SSM, without SSH keys |
+| `AmazonEBSCSIDriverPolicy` | Permission to create EBS disks. *On the node for now; Step 05 moves it to Pod Identity* |
+| `system = { ... }` | The system node group: starts with 2 nodes, can grow to 4 |
+| `min_size / max_size / desired_size` | Never fewer than 2, never more than 4, start with 2 |
+| `labels = { role = "system" }` | Puts the label `role=system` on these nodes |
+| `app = { ... }` | The app node group, also 2 → 4 nodes |
+| `taints = { ... NO_SCHEDULE }` | Puts `workload=app:NoSchedule` on app nodes: no Pod lands here without a toleration |
 
-> **Interview one-liner (hop limit):** "I set the IMDS hop limit to 1 so Pods can't fall back to the node's IAM role. Pods get AWS access only through Pod Identity."
+#### (d) `outputs.tf`: fix one output
 
----
-
-### 1.3 (d) `outputs.tf` — fix one output
-
-**What:** the output `nodegroup_name` pointed at the old single node group.
-**Why:** that node group no longer exists, so print the new group names instead.
+**What:** one output still points to the old node group name.
+**Why:** that node group no longer exists, so Terraform would fail. Print the new group names instead.
 
 ```bash
 nano outputs.tf
 ```
 
-Find `value = var.nodegroup_name` and change it to:
+Find this line:
+
+```hcl
+  value       = var.nodegroup_name
+```
+
+Change it to:
 
 ```hcl
   value       = keys(module.eks.eks_managed_node_groups)
@@ -291,12 +436,10 @@ Find `value = var.nodegroup_name` and change it to:
 
 > After `apply` this prints `["app", "system"]`.
 
----
+#### (e) `ecr.tf`: your private image registry (new file)
 
-### 1.3 (e) `ecr.tf` — my private image registry (new file)
-
-**What:** 2 ECR repositories: `prod-frontend` and `prod-backend`.
-**Why:** in production, images come from **my own** registry, not Docker Hub. Kyverno (Step 06) will block anything that is not from ECR.
+**What:** create 2 ECR repositories, `prod-frontend` and `prod-backend`.
+**Why:** in production, images come from **your own** registry, not public Docker Hub. In Step 06 a policy will block any image that is not from ECR.
 
 ```bash
 nano ecr.tf
@@ -314,124 +457,151 @@ resource "aws_ecr_repository" "app" {
 
 | Line | Meaning |
 |---|---|
-| `for_each = toset([...])` | Create one repo per name in the list (2 repos from 1 block) |
-| `IMMUTABLE` | Once `v1` is pushed, nobody can push a different image as `v1` again |
-| `force_delete = true` | `terraform destroy` can delete the repo even if images are inside |
-| `scan_on_push = true` | ECR scans every pushed image for CVEs automatically |
+| `resource "aws_ecr_repository" "app"` | "Create an ECR repository", called `app` inside Terraform |
+| `for_each = toset([...])` | Repeat this block once per name: 2 repos from 1 block |
+| `name = each.value` | The repo name: `prod-frontend`, then `prod-backend` |
+| `IMMUTABLE` | Once tag `v1` is pushed, no one can push a different image as `v1`. A tag always means the same image |
+| `force_delete = true` | `terraform destroy` can delete the repo even if images are still inside |
+| `scan_on_push = true` | ECR checks every new image for known vulnerabilities (CVEs) |
 
 ---
 
-### 1.4 Check the code (free, nothing is created yet)
+### 1.4 Check the code (free: nothing is created yet)
 
 ```bash
 terraform init
 ```
 
-> Downloads the AWS provider and the VPC/EKS modules into `.terraform/`. If it fails with `connection reset by peer`, run it again.
+> Downloads the AWS plugin (provider) and the VPC/EKS modules into a hidden `.terraform/` folder. Run it once per folder.
 
 ```bash
 terraform fmt
 ```
 
-> Fixes spacing/indentation in all `.tf` files (neat code).
+> Tidies the spacing and indentation in all `.tf` files.
 
 ```bash
 terraform validate
 ```
 
-> Checks the code is correct (spelling, brackets, missing values). Must say **Success!**
+> Checks the code for mistakes (typos, missing brackets, wrong names). It must say **Success! The configuration is valid.**
 
 ---
 
-### 1.5 Plan and apply (💰 cost starts here)
+### 1.5 Preview and create (💰 cost starts here)
 
 ```bash
 terraform plan
 ```
 
-> Shows **what will be created** without creating anything. Read it: you should see the VPC, the EKS cluster, node groups `system` and `app`, the add-ons, 2 ECR repos and the bastion.
+> A **preview only**, nothing is created. Scroll through it and check you see: the VPC and subnets, the EKS cluster, node groups `system` and `app`, the 2 add-ons, 2 ECR repositories and the bastion. The last line says `Plan: N to add, 0 to change, 0 to destroy`.
 
 ```bash
 terraform apply
 ```
 
-> Type `yes`. Takes about **20 minutes** (EKS control plane is the slow part).
+> Shows the plan again and asks for confirmation: type `yes`. It takes about **20 minutes**; creating the EKS control plane is the slow part. Don't close the terminal.
 
 ---
 
-### ✅ Check (🖥️ bastion)
+### 1.6 ✅ Check that everything works
 
-Get the ssh command from the outputs:
+Print the ssh command for the bastion:
 
 ```bash
 terraform output bastion_ssh_command
 ```
 
+Connect to the bastion (user is `ubuntu`):
+
 ```bash
 ssh -i ~/.ssh/abhigna-eks-key.pem ubuntu@<bastion-public-ip>
 ```
+
+> If it says `kubectl: command not found`, the bootstrap script is still running. Wait 2–3 minutes and log in again.
+
+Now, **on the bastion**:
 
 ```bash
 kubectl get nodes -L role
 ```
 
-> 4 nodes: 2 with `role=system`, 2 with `role=app`, all `Ready`.
+> Expected: **4 nodes**, all `Ready`. 2 show `system` and 2 show `app` in the ROLE column.
 
 ```bash
 kubectl describe nodes -l role=app | grep Taints
 ```
 
-> Both app nodes show `workload=app:NoSchedule`.
+> Expected: both app nodes show `workload=app:NoSchedule`.
 
 ```bash
 kubectl get pods -n kube-system
 ```
 
-> `eks-pod-identity-agent-*` and `ebs-csi-*` Pods are `Running`.
+> Expected: `eks-pod-identity-agent-...` and `ebs-csi-...` Pods are `Running`.
 
 ```bash
-aws ecr describe-repositories --query 'repositories[].repositoryName' --output text
+aws ecr describe-repositories --region us-east-1 --query 'repositories[].repositoryName' --output text
 ```
 
-> `prod-frontend  prod-backend`
+> Expected: `prod-frontend    prod-backend`
+
+🎉 If all 4 checks pass, Step 01 is done.
 
 ---
+
+## Common problems
+
+| Error | Why it happens | Fix |
+|---|---|---|
+| `connection reset by peer` during `terraform init` | Network dropped the download | Run `terraform init` again |
+| `InvalidKeyPair.NotFound` | The key pair name in `terraform.tfvars` doesn't exist in us-east-1 | Do step 1.1, or fix `key_pair_name` |
+| `Reference to undeclared ... nodegroup_name` | `outputs.tf` still points to the old node group | Do step 1.3 (d) |
+| `Unsupported Kubernetes version` | The version isn't offered any more | Pick a `STANDARD_SUPPORT` version from step 1.3 (a) |
+| `VcpuLimitExceeded` | Your AWS account's vCPU quota is too low for 5 machines | Request a quota increase in Service Quotas, or set fewer nodes |
+| `ssh: Permission denied (publickey)` | Wrong key file or wrong user | Use `-i ~/.ssh/abhigna-eks-key.pem` and user `ubuntu` |
+| `ssh: Connection timed out` | Your IP isn't allowed in `ssh_allowed_cidr` | Put your current IP from `curl -s ifconfig.me` and `apply` again |
 
 ## Cost
 
 | What | Approx. per hour |
 |---|---|
 | EKS control plane (standard support) | $0.10 |
-| 4 × m7i-flex.large nodes + bastion (~$0.096 each) | ~$0.48 |
+| 4 worker nodes + bastion (m7i-flex.large, ~$0.096 each) | ~$0.48 |
 | NAT gateway | ~$0.045 + data |
 | **Total** | **~$0.63/hr (~$15/day)** |
 
-Stop for the day? Run this from the terraform folder on the laptop:
+Stopping for the day? Delete everything (from the `terraform` folder on your laptop):
 
 ```bash
 terraform destroy
 ```
+
+> Type `yes`. Takes about 15 minutes. Next time, `terraform apply` builds it all again in the same way.
 
 ## Interview Questions
 
 ### ⭐ Very Important
 
 **Q1. Why do you separate system and app node groups?**
-So cluster add-ons (CoreDNS, Argo CD, monitoring) and the application don't fight for CPU/RAM. The app group is tainted, so only app Pods with a toleration land there.
+So cluster tools (CoreDNS, Argo CD, monitoring) and the application don't fight for CPU and memory. The app group is tainted, so only app Pods with a toleration can run there.
 
 **Q2. Why are worker nodes in private subnets?**
-Nobody on the internet can reach them directly. They go out through the NAT gateway; users come in only through the load balancer.
+Nobody on the internet can reach them directly. They go out through the NAT gateway, and users come in only through the load balancer.
 
 **Q3. Why should you avoid EKS versions in extended support?**
-The control plane costs 6× more ($0.60/hr vs $0.10/hr) and you are running an old version. Upgrade regularly.
+The control plane costs 6× more ($0.60/hr instead of $0.10/hr) and you are running an old version. Upgrade regularly.
 
 ### Other Questions
 
-**Q4. What does IMDS hop limit 1 protect against?**
+**Q4. What does an IMDS hop limit of 1 protect against?**
 A Pod reading the node's instance metadata and using the node's IAM role. With hop limit 1 the answer never reaches the Pod.
 
-**Q5. Why ECR with immutable tags?**
-Images stay in my AWS account, are scanned on push, and a tag like `v1` always means the same image, so deployments are repeatable.
+**Q5. Why use ECR with immutable tags?**
+Images stay in your AWS account, are scanned on push, and a tag like `v1` always means the same image, so deployments are repeatable.
 
-**Q6. Why SSM instead of SSH keys on nodes?**
-No port 22 open, no key to lose or leak, and every session is logged in AWS.
+**Q6. Why use SSM instead of SSH keys on worker nodes?**
+No port 22 is open, there is no key to lose or leak, and every session is logged in AWS.
+
+**Q7. What is the difference between `terraform plan` and `terraform apply`?**
+`plan` only shows what would change. `apply` makes the changes in AWS. Always read the plan before you apply.
