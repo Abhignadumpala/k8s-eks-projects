@@ -341,6 +341,13 @@ aws ec2 describe-key-pairs --region us-east-1 --key-names abhigna-eks-key --quer
 **What:** download this repository and make a copy of the basic EKS Terraform setup.
 **Why:** you start from code that already works, and keep the original untouched so you can compare "basic" vs "production" later.
 
+> ⚠️ Run `git clone` from your **home folder** (`cd ~` first), never inside another project folder. Otherwise you get a second copy of the repo inside the first one.
+> Already have the repo? Skip the clone and just `cd ~/k8s-eks-projects`.
+
+```bash
+cd ~
+```
+
 ```bash
 git clone https://github.com/Abhignadumpala/k8s-eks-projects.git
 ```
