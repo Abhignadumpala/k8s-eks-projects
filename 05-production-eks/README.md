@@ -167,6 +167,73 @@ hop limit 1 (safe):   Pod ──► node ──► IMDS  ❌ answer stops at the
 
 > **Interview one-liner:** "I set the IMDS hop limit to 1 so Pods can't use the node's IAM role. Pods get AWS access only through Pod Identity, each with its own role."
 
+### The bastion: why we create it, what it can do, what we use it for
+
+**Bastion (jump box)** = one small, controlled EC2 machine inside the VPC that you log in to, and **from there** you manage the cluster.
+
+#### Why create a bastion at all?
+
+Your laptop could run `kubectl` too. Companies still use a bastion (or a similar admin box) because:
+
+| Without a bastion (kubectl from every laptop) | With a bastion |
+|---|---|
+| Every admin needs AWS keys + kubeconfig on their own laptop | Admins only need SSH. The **bastion's role** talks to AWS, with temporary credentials |
+| Tools on each laptop are different versions | One machine with the **right** `kubectl` (1.36), `helm`, `aws` versions |
+| Hard to see who did what | One entry point → easy to control and audit |
+| If the API server is made **private** later, laptops can't reach it | The bastion is **inside the VPC**, so it still works |
+
+```
+💻 Laptop ──SSH (port 22, your .pem key)──► 🖥️ Bastion (public subnet)
+                                               │  IAM role: temporary credentials
+                                               ▼
+                                       ☸️ EKS API server (port 443)
+                                               │
+                                               ▼
+                                    worker nodes (private subnets)
+```
+
+#### What we will do on the bastion (in this project)
+
+| Step | What you run on the bastion |
+|---|---|
+| 01 | `kubectl get nodes` → check the cluster is healthy |
+| 01–10 | `helm install` → install Argo CD, Kyverno, Istio, Prometheus, the load balancer controller |
+| 03–08 | `kubectl apply` → RBAC, Pods, Services, policies, HPA, PDB |
+| 11 | Debug: `kubectl describe`, `kubectl logs`, `kubectl get events` |
+
+> Terraform does **not** run on the bastion. The bastion is created **by** Terraform, so Terraform always runs on your laptop.
+
+#### What permissions the bastion gets (and why only these)
+
+The bastion needs access in **two different places**: AWS, and inside Kubernetes.
+
+| Where | Permission | Given by | Why it needs it |
+|---|---|---|---|
+| **AWS** | Use the IAM role `abhigna-prod-bastion-server-role-eks` | Trust policy: only `ec2.amazonaws.com` may use it | The bastion gets **temporary** credentials automatically, so no access keys are stored on it |
+| **AWS** | `eks:DescribeCluster`, `ListClusters`, `DescribeNodegroup`, `ListNodegroups` | `aws_iam_role_policy` (read-only) | `aws eks update-kubeconfig` needs to read the cluster's address and certificate |
+| **AWS** | Pull images from ECR (read-only) | `AmazonEC2ContainerRegistryReadOnly` | To check or test images in ECR |
+| **EKS login** | Access entry → Kubernetes group `bastion-admin` | `access_entries` in `eks.tf` | Lets the bastion's IAM role **log in** to the cluster (authentication: *who are you?*) |
+| **Inside Kubernetes** | `cluster-admin` | `ClusterRoleBinding` in `eks.tf` | Lets it **do everything** in the cluster: install tools, create namespaces (authorization: *what can you do?*) |
+| **Network** | SSH in (port 22) from `ssh_allowed_cidr` | Security group | So you can log in from your laptop |
+| **Network** | Call the API server (port 443) | Extra rule on the cluster's security group | So `kubectl` on the bastion can reach the cluster |
+
+What the bastion **cannot** do in AWS: create or delete EC2 machines, change IAM, delete the cluster, or read Secrets Manager. Its AWS permissions are **read-only**. That is **least privilege**: if someone breaks into the bastion, they can't destroy your AWS account.
+
+> It is `cluster-admin` **inside Kubernetes** because in this project it is the admin machine. In a real company you'd lock it down more (Step 03 shows how to make limited users with RBAC).
+
+#### Keeping the bastion safe
+
+| Risk | How it's handled |
+|---|---|
+| Anyone on the internet can try SSH | Set `ssh_allowed_cidr` to **your IP only** (`<your-ip>/32`) |
+| Stolen key file | `.pem` stays on your laptop, `chmod 400`, never pushed to Git |
+| Stored AWS keys get leaked | None stored: the IAM role gives temporary credentials |
+| Disk data | Root disk is **encrypted** |
+
+> **Production alternatives:** many companies remove port 22 entirely and log in with **AWS SSM Session Manager**, or run `kubectl` from a CI/CD pipeline / GitOps tool (Argo CD, Step 09) so humans rarely touch the cluster.
+
+> **Interview one-liner:** "The bastion is a single admin entry point inside the VPC. It has an IAM role with read-only EKS permissions and gets cluster-admin inside Kubernetes through an access entry and a ClusterRoleBinding. SSH is limited to my IP, and no AWS keys are stored on it."
+
 ---
 
 ## Before you start
@@ -377,6 +444,8 @@ bastion EC2 ──IAM role──► access entry (AWS side: "you may log in, gro
 ---
 
 #### `bastion.tf`: the jump box
+
+> **Why** we create it and **what** we do with it is explained in Concepts → *The bastion*. Here is how the code builds it.
 
 **1. Security group (the bastion's firewall)**
 
@@ -809,5 +878,8 @@ Images stay in your AWS account, are scanned on push, and a tag like `v1` always
 **Q6. Why use SSM instead of SSH keys on worker nodes?**
 No port 22 is open, there is no key to lose or leak, and every session is logged in AWS.
 
-**Q7. What is the difference between `terraform plan` and `terraform apply`?**
+**Q7. Why use a bastion host, and what permissions should it have?**
+It's a single admin entry point inside the VPC with the right tool versions. It gets only read-only EKS permissions in AWS through an IAM role (temporary credentials, no stored keys), and its Kubernetes permissions come from an access entry + RBAC binding. SSH should be limited to your IP, or replaced by SSM.
+
+**Q8. What is the difference between `terraform plan` and `terraform apply`?**
 `plan` only shows what would change. `apply` makes the changes in AWS. Always read the plan before you apply.
