@@ -61,6 +61,8 @@ You use **two machines**:
 
 ## What you will build in this step
 
+**A production-grade EKS cluster**: the network, the cluster, two groups of worker machines, a bastion to manage it, and a private image registry.
+
 ```
                          AWS region us-east-1
  ┌─────────────────────────── VPC 10.0.0.0/16 ───────────────────────────┐
@@ -116,11 +118,26 @@ The 4 Terraform commands you will use:
 | `terraform plan` | Shows what **would** be created (a preview) | No |
 | `terraform apply` | Actually creates everything in AWS | **Yes** |
 
-### Basic cluster vs production cluster
+### We are building a production cluster now
 
-This project starts from a **basic, working** Terraform setup ([01-eks-terraform](../01-eks-terraform)) and upgrades it. Here is what changes and why:
+👉 **In this step you build a production-grade EKS cluster.** Not a practice cluster.
 
-| # | Topic | Basic setup | Production setup | Why it matters |
+To save time, you don't write it from zero. You start from a **basic EKS cluster** that already works ([01-eks-terraform](../01-eks-terraform)) and **upgrade it to production** by changing 10 things.
+
+```
+ Basic cluster (practice)               Production cluster (what we build now)
+ ───────────────────────                ──────────────────────────────────────
+ works, but:                            works, AND:
+  - old, expensive version               - new version, cheaper
+  - one group of machines for all        - separate machines for tools and app
+  - Pods can borrow node permissions     - Pods can't borrow node permissions
+  - SSH keys, FullAccess policies        - no SSH keys, only needed permissions
+  - images on public Docker Hub          - images in private ECR, scanned
+```
+
+The 10 changes (you make them in step 1.3):
+
+| # | Topic | Basic cluster (before) | Production cluster (now) | Why it matters |
 |---|---|---|---|---|
 | 1 | **EKS version** | 1.33 | **1.36** | Old versions go into *extended support* and the control plane costs **$0.60/hr instead of $0.10/hr** (6×) |
 | 2 | **Cluster name** | `abhigna-cluster` | `abhigna-prod` | A new name, so it never clashes with an older cluster |
@@ -132,6 +149,21 @@ This project starts from a **basic, working** Terraform setup ([01-eks-terraform
 | 8 | **Logging in to nodes** | SSH key | **SSM Session Manager** | No open SSH port and no key that can leak |
 | 9 | **Node permissions** | many `FullAccess` policies | only what is needed | *Least privilege*: if a node is hacked, the attacker gets very little |
 | 10 | **Image registry** | Docker Hub | **ECR**, immutable tags, scan on push | Images stay in your own AWS account and are scanned for vulnerabilities |
+
+#### The 10 changes in plain words
+
+1. **EKS version:** AWS charges more for old Kubernetes versions. 1.33 is old now, so we use 1.36 (new and cheap).
+2. **Cluster name:** a different name so the new cluster doesn't get mixed up with an old one.
+3. **kubectl version:** `kubectl` is the tool that talks to the cluster. Tool and cluster should be the same version, like an app and its phone OS.
+4. **Node groups:** before, one group of machines ran your app *and* the cluster tools. If monitoring used a lot of CPU, your app got slow. Now the **system** machines run the tools and the **app** machines run only your app, like separate kitchens for staff and customers.
+5. **Taint:** a "keep out" sign on the app machines. Only Pods that carry a matching pass (a *toleration*) can go there, and only your app has that pass.
+6. **Pod Identity agent:** your backend will need AWS access (for example, to read the DB password). The bad way is putting AWS keys in the Pod. Pod Identity gives the Pod **temporary** access that expires on its own.
+7. **IMDS hop limit 1:** every AWS machine has an internal address where it can ask "what are my AWS permissions?". A Pod could ask the same question and borrow the machine's permissions. Hop limit 1 means only the machine gets the answer, not the Pods.
+8. **SSM instead of SSH:** logging in with SSH needs an open port and a key file that can leak. SSM needs neither, and AWS records every login.
+9. **Least privilege:** before, the machines had lots of "FullAccess" permissions, so a hacker who got in could do a lot. Now they get only what they need.
+10. **ECR:** your private image registry in AWS. Every image is scanned for security holes, and a tag like `v1` can never be overwritten with a different image.
+
+> **In one line:** the basic cluster *works*. The production cluster *works, is cheaper, is safer and is organised*.
 
 ### System vs app node groups
 
@@ -558,7 +590,7 @@ terraform.tfvars      →  "for this project, cluster_name = abhigna-prod"   ←
 
 ---
 
-### 1.3 Upgrade the code to production
+### 1.3 Turn the basic cluster code into a production cluster
 
 You will edit 4 files and create 1 new one. `nano` is a simple text editor: save with `Ctrl+O` → `Enter`, exit with `Ctrl+X`.
 
