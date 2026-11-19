@@ -24,7 +24,11 @@
         + EKS control plane (run by AWS)   + 2 ECR repositories
 ```
 
-## Concepts (read this first)
+# Part 1 — Understand (read first)
+
+Read this part once before the lab. It explains **what** you are building and **why**. The lab in Part 2 tells you **exactly what to type**.
+
+## 1.1 Concepts
 
 ### The pieces, in simple words
 
@@ -78,7 +82,7 @@ To save time, you don't write it from zero. You start from a **basic EKS cluster
   - images on public Docker Hub          - images in private ECR, scanned
 ```
 
-The 10 changes (you make them in step 1.3):
+The 10 changes (you make them in the Part 2 lab, Tasks 3–7):
 
 | # | Topic | Basic cluster (before) | Production cluster (now) | Why it matters |
 |---|---|---|---|---|
@@ -211,136 +215,11 @@ What the bastion **cannot** do in AWS: create or delete EC2 machines, change IAM
 
 ---
 
-## Before you start
+## 1.2 The code, file by file
 
-### Tools on your laptop
+The lab starts from a basic EKS setup that already works ([01-eks-terraform](../../01-eks-terraform)). Here is every file in it, with its code and what each line does.
 
-| Tool | Check command | Install guide |
-|---|---|---|
-| AWS CLI v2 | `aws --version` | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html |
-| Terraform ≥ 1.5 | `terraform -version` | https://developer.hashicorp.com/terraform/install |
-| Git | `git --version` | https://git-scm.com/downloads |
-
-### AWS access
-
-You need an AWS account and an IAM user with admin permissions (for learning).
-Connect the AWS CLI to your account:
-
-```bash
-aws configure
-```
-
-> It asks for your Access Key ID, Secret Access Key, region (`us-east-1`) and output format (`json`).
-
-Check that it works:
-
-```bash
-aws sts get-caller-identity
-```
-
-> You should see your account number and user name. If you get an error, the CLI is not connected yet.
-
----
-
-## Lab
-
-### 1.1 Create an EC2 key pair
-
-**What:** a key pair is like a lock and key. AWS keeps the **lock** (public key) and you keep the **key** (private key, a `.pem` file).
-**Why:** the bastion is created with this lock, so only you (with the key) can `ssh` into it.
-
-```bash
-aws ec2 create-key-pair --key-name abhigna-eks-key --region us-east-1 --query 'KeyMaterial' --output text > ~/.ssh/abhigna-eks-key.pem
-```
-
-> You can use any name instead of `abhigna-eks-key`. If you do, use the same name in `terraform.tfvars` (`key_pair_name`) in step 1.3.
-
-```bash
-chmod 400 ~/.ssh/abhigna-eks-key.pem
-```
-
-> `chmod 400` = only you can read the file. `ssh` refuses a key file that other users can read.
-
-**✅ Check:**
-
-```bash
-head -1 ~/.ssh/abhigna-eks-key.pem
-```
-
-> Shows `-----BEGIN RSA PRIVATE KEY-----`
-
-```bash
-aws ec2 describe-key-pairs --region us-east-1 --key-names abhigna-eks-key --query 'KeyPairs[].KeyName' --output text
-```
-
-> Shows `abhigna-eks-key`
-
-⚠️ AWS shows the private key **only once**. If you delete the `.pem` file, you have to create a new key pair. Never push it to GitHub.
-
----
-
-### 1.2 Get the starting Terraform code
-
-**What:** download this repository and make a copy of the basic EKS Terraform setup.
-**Why:** you start from code that already works, and keep the original untouched so you can compare "basic" vs "production" later.
-
-> ⚠️ Run `git clone` from your **home folder** (`cd ~` first), never inside another project folder. Otherwise you get a second copy of the repo inside the first one.
-> Already have the repo? Skip the clone and just `cd ~/k8s-eks-projects`.
-
-```bash
-cd ~
-```
-
-```bash
-git clone https://github.com/Abhignadumpala/k8s-eks-projects.git
-```
-
-```bash
-cd k8s-eks-projects
-```
-
-```bash
-mkdir -p 05-production-eks
-```
-
-```bash
-cp -r 01-eks-terraform 05-production-eks/terraform
-```
-
-```bash
-cd 05-production-eks/terraform
-```
-
-```bash
-ls
-```
-
-What each file does:
-
-| File | What it does |
-|---|---|
-| `providers.tf` | Tells Terraform "we are using AWS, in this region" |
-| `variables.tf` | The list of settings (names, sizes, network ranges) with default values |
-| `terraform.tfvars` | **Your values** for those settings. This is the main file you edit |
-| `vpc.tf` | Creates the VPC, 3 public + 3 private subnets and the NAT gateway |
-| `eks.tf` | Creates the EKS cluster, worker node groups and add-ons |
-| `bastion.tf` | Creates the bastion EC2, its firewall (security group) and its IAM role |
-| `bastion_bootstrap.sh.tpl` | A script that runs on the bastion's first boot: installs `aws`, `kubectl`, `helm` and connects to the cluster |
-| `outputs.tf` | Values printed at the end of `apply` (cluster name, bastion IP, ssh command) |
-
-> The code uses ready-made **Terraform modules** for the VPC and EKS. A module = a reusable package of Terraform code, so you don't write 500 lines yourself.
-
----
-
-### 1.2 (b) Understand the code you copied
-
-Before changing anything, read what the existing code does. Open the folder in VS Code:
-
-```bash
-code .
-```
-
-#### Terraform words you will see
+### Terraform words you will see
 
 | Word | Example | Meaning |
 |---|---|---|
@@ -355,7 +234,7 @@ code .
 
 ---
 
-#### `providers.tf`: which cloud and which plugins
+### `providers.tf`: which cloud and which plugins
 
 ```hcl
 terraform {
@@ -419,7 +298,7 @@ provider "kubernetes" {
 
 ---
 
-#### `vpc.tf`: the network
+### `vpc.tf`: the network
 
 ```hcl
 # ───────────────────────────────────────────────
@@ -482,9 +361,9 @@ module "vpc" {
 
 ---
 
-#### `eks.tf`: the cluster
+### `eks.tf`: the cluster
 
-This is the file as you copied it. The part between `cluster_addons = {` and the end of `eks_managed_node_groups` is the **old node group**: you replace it in step 1.3 (c). Everything else you keep.
+This is the file as you copied it. The part between `cluster_addons = {` and the end of `eks_managed_node_groups` is the **old node group**: you replace it in Lab Task 5. Everything else you keep.
 
 ```hcl
 # ───────────────────────────────────────────────
@@ -622,7 +501,7 @@ resource "kubernetes_cluster_role_binding" "bastion_admin" {
 | `vpc_id = module.vpc.vpc_id` | Put the cluster in the VPC from `vpc.tf` |
 | `subnet_ids = module.vpc.private_subnets` | Worker nodes go in the **private** subnets |
 | `enable_irsa = true` | Creates an OIDC provider so Pods can use IAM roles (IRSA, the older way next to Pod Identity) |
-| `cluster_addons`, node groups | **You replace these in step 1.3 (c)** |
+| `cluster_addons`, node groups | **You replace these in Lab Task 5** |
 | `cluster_security_group_additional_rules` | Firewall rule: the bastion may call the API server on port **443** |
 | `resource "kubernetes_cluster_role_binding" "bastion_admin"` | Inside Kubernetes: gives the group `bastion-admin` the built-in `cluster-admin` role |
 
@@ -639,7 +518,7 @@ bastion EC2 ──IAM role──► access entry (AWS side: "you may log in, gro
 
 ---
 
-#### `bastion.tf`: the jump box
+### `bastion.tf`: the jump box
 
 > **Why** we create it and **what** we do with it is explained in Concepts → *The bastion*. Here is how the code builds it.
 
@@ -797,7 +676,7 @@ resource "aws_instance" "bastion" {
 |---|---|
 | `ami = var.bastion_ami_id` | Operating system image: Ubuntu 22.04 |
 | `instance_type = var.bastion_instance_type` | Machine size: `m7i-flex.large` |
-| `key_name = var.key_pair_name` | The key pair from step 1.1 → you can `ssh` in |
+| `key_name = var.key_pair_name` | The key pair from Lab Task 1 → you can `ssh` in |
 | `subnet_id = module.vpc.public_subnets[0]` | Place it in the **first public subnet** (`[0]` = first in the list) |
 | `vpc_security_group_ids` | Attach the firewall from part 1 |
 | `iam_instance_profile` | Attach the IAM role from parts 2–4 |
@@ -828,9 +707,9 @@ output "bastion_ssh_command" {
 
 ---
 
-#### `bastion_bootstrap.sh.tpl`: what runs on the bastion's first boot
+### `bastion_bootstrap.sh.tpl`: what runs on the bastion's first boot
 
-> The `${aws_region}` and `${cluster_name}` placeholders are filled in by Terraform (`templatefile`) before the script runs. Shown here with kubectl **v1.36.0** (after step 1.3 b).
+> The `${aws_region}` and `${cluster_name}` placeholders are filled in by Terraform (`templatefile`) before the script runs. Shown here with kubectl **v1.36.0** (after Lab Task 4).
 
 <details>
 <summary>Show the full script</summary>
@@ -948,7 +827,7 @@ echo "Run: kubectl get nodes"
 
 ---
 
-#### `variables.tf` and `terraform.tfvars`: settings vs values
+### `variables.tf` and `terraform.tfvars`: settings vs values
 
 Every setting in `variables.tf` looks like this (a name, a description, a type and a default):
 
@@ -1100,7 +979,7 @@ variable "node_max_size" {
 
 </details>
 
-And `terraform.tfvars` gives the real values (shown **after** the 3 changes in step 1.3 a):
+And `terraform.tfvars` gives the real values (shown **after** the 3 changes in Lab Task 3):
 
 ```hcl
 # ───────────────────────────────────────────────
@@ -1145,7 +1024,7 @@ terraform.tfvars      →  "for this project, cluster_name = abhigna-prod"   ←
 
 > Change values in `terraform.tfvars`; leave `variables.tf` alone unless you add a brand-new setting.
 
-#### `outputs.tf`: what you see after `apply`
+### `outputs.tf`: what you see after `apply`
 
 ```hcl
 # ───────────────────────────────────────────────
@@ -1201,79 +1080,13 @@ output "nodegroup_name" {
 | `vpc_id`, `cluster_security_group_id` | Needed later (for example, the load balancer controller in a later step) |
 | `oidc_provider_arn` | Needed for IRSA |
 | `configure_kubectl` | The `aws eks update-kubeconfig` command, ready to copy |
-| `nodegroup_name` | **You fix this in step 1.3 (d)** |
+| `nodegroup_name` | **You fix this in Lab Task 6** |
 
 ---
 
-### 1.3 Turn the basic cluster code into a production cluster
+## 1.3 The new code you will add
 
-You will edit 4 files and create 1 new one. `nano` is a simple text editor: save with `Ctrl+O` → `Enter`, exit with `Ctrl+X`.
-
-#### (a) `terraform.tfvars`: name and version
-
-**What:** change 3 values.
-**Why:** give the new cluster its own name, and use a Kubernetes version that is in standard (cheaper) support.
-
-```bash
-nano terraform.tfvars
-```
-
-| Find this line | Change it to | Why |
-|---|---|---|
-| `project_name = "abhigna"` | `project_name = "abhigna-prod"` | Used as a prefix for the VPC name and tags |
-| `cluster_name    = "abhigna-cluster"` | `cluster_name    = "abhigna-prod"` | The new cluster's name |
-| `cluster_version = "1.33"` | `cluster_version = "1.36"` | 1.33 is in extended support (6× the price) |
-
-> Leave the `nodegroup_name` and `node_*` lines as they are. They are no longer used, and Terraform does not complain about unused values.
-
-To see which versions are in standard support (cheap) right now:
-
-```bash
-aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text
-```
-
-> Pick a version that says `STANDARD_SUPPORT`, never `EXTENDED_SUPPORT`.
-
-**Optional but safer:** allow SSH to the bastion only from your own IP. Find your IP:
-
-```bash
-curl -s ifconfig.me
-```
-
-> Then in `terraform.tfvars` set `ssh_allowed_cidr = "<your-ip>/32"` instead of `"0.0.0.0/0"` (which means "the whole internet").
-
-#### (b) `bastion_bootstrap.sh.tpl`: kubectl version
-
-**What:** make the bastion install `kubectl` 1.36.
-**Why:** `kubectl` should match the cluster version. A big gap can cause errors.
-
-```bash
-sed -i 's#v1.35.0/bin#v1.36.0/bin#' bastion_bootstrap.sh.tpl
-```
-
-> `sed -i 's#old#new#' file` = find `old` and replace it with `new` inside the file.
-
-**✅ Check:**
-
-```bash
-grep -n "dl.k8s.io" bastion_bootstrap.sh.tpl
-```
-
-> The line should now contain `v1.36.0`.
-
-#### (c) `eks.tf`: add-ons and two node groups (the main change)
-
-**What:** replace the single node group with a **system** and an **app** node group, and add the Pod Identity add-on.
-**Why:** this is what makes the cluster production-style (see the Concepts table above).
-
-```bash
-nano eks.tf
-```
-
-1. **Find** the line that starts with `cluster_addons = {`.
-2. **Delete** from that line down to the closing `}` of the `eks_managed_node_groups` block. This removes the old node group (named `abhigna-cluster-ng-1`) with its `remote_access` and `FullAccess` policies.
-3. **Keep** everything above it (`cluster_name`, `access_entries`, `vpc_id`, `enable_irsa`) and everything below it (`cluster_security_group_additional_rules` and the `kubernetes_cluster_role_binding` resource).
-4. **Paste** this in the empty space:
+In the lab you **replace** the old node group in `eks.tf` with this block:
 
 ```hcl
   cluster_addons = {
@@ -1326,7 +1139,7 @@ nano eks.tf
 | `ami_type = "AL2023_x86_64_STANDARD"` | The operating system of the nodes: Amazon Linux 2023 |
 | `instance_types = ["m7i-flex.large"]` | Machine size: 2 vCPU, 8 GB RAM per node |
 | `http_tokens = "required"` | Use IMDSv2 only (requires a session token, safer than v1) |
-| `http_put_response_hop_limit = 1` | The metadata answer can't reach Pods (see "What is IMDS" above) |
+| `http_put_response_hop_limit = 1` | The metadata answer can't reach Pods (see *What is IMDS*) |
 | `AmazonSSMManagedInstanceCore` | Lets you log in to a node through AWS SSM, without SSH keys |
 | `AmazonEBSCSIDriverPolicy` | Permission to create EBS disks. *On the node for now; Step 05 moves it to Pod Identity* |
 | `system = { ... }` | The system node group: starts with 2 nodes, can grow to 4 |
@@ -1335,37 +1148,7 @@ nano eks.tf
 | `app = { ... }` | The app node group, also 2 → 4 nodes |
 | `taints = { ... NO_SCHEDULE }` | Puts `workload=app:NoSchedule` on app nodes: no Pod lands here without a toleration |
 
-#### (d) `outputs.tf`: fix one output
-
-**What:** one output still points to the old node group name.
-**Why:** that node group no longer exists, so Terraform would fail. Print the new group names instead.
-
-```bash
-nano outputs.tf
-```
-
-Find this line:
-
-```hcl
-  value       = var.nodegroup_name
-```
-
-Change it to:
-
-```hcl
-  value       = keys(module.eks.eks_managed_node_groups)
-```
-
-> After `apply` this prints `["app", "system"]`.
-
-#### (e) `ecr.tf`: your private image registry (new file)
-
-**What:** create 2 ECR repositories, `prod-frontend` and `prod-backend`.
-**Why:** in production, images come from **your own** registry, not public Docker Hub. In Step 06 a policy will block any image that is not from ECR.
-
-```bash
-nano ecr.tf
-```
+And you **create** a new file `ecr.tf`:
 
 ```hcl
 resource "aws_ecr_repository" "app" {
@@ -1388,87 +1171,508 @@ resource "aws_ecr_repository" "app" {
 
 ---
 
-### 1.4 Check the code (free: nothing is created yet)
+# Part 2 — 🛠️ Hands-On Lab: Let's Start
+
+Now you build it. Do the tasks **in order**, one at a time. Don't skip the ✅ Check at the end of each task.
+
+## How to read each task
+
+| Label | Meaning |
+|---|---|
+| 📍 **Where** | Which window to use |
+| 💻 **Terminal** | The black window where you type commands, **on your laptop** |
+| 📝 **VS Code** | The editor, only for changing files |
+| 🖥️ **Bastion** | The EC2 you log in to with `ssh` (only in Task 10) |
+| ▶️ **Do** | The commands to run, one box at a time: copy, paste, press Enter |
+| ✅ **Check** | How to know the task worked |
+
+```
+Task 0   Tools ready?                  💻   free
+Task 1   Create the key pair           💻   free
+Task 2   Get the code                  💻   free
+Task 3   Name + version                📝   free
+Task 4   kubectl version               📝   free
+Task 5   Two node groups (eks.tf)      📝   free
+Task 6   Fix outputs.tf                📝   free
+Task 7   Create ecr.tf                 📝   free
+Task 8   Check the code                💻   free
+Task 9   Create everything in AWS      💻   💰 cost starts
+Task 10  Test the cluster              🖥️   bastion
+Task 11  Delete everything             💻   when you stop
+```
+
+---
+
+## Task 0 — Are your tools ready?
+
+📍 **Where:** 💻 Terminal
+
+**Why:** the lab uses the AWS CLI, Terraform and Git. If one is missing, later tasks fail.
+
+▶️ **Do:**
+
+```bash
+aws --version
+```
+
+```bash
+terraform -version
+```
+
+```bash
+git --version
+```
+
+> Missing one? Install guides: [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) · [Terraform](https://developer.hashicorp.com/terraform/install) · [Git](https://git-scm.com/downloads)
+
+Connect the AWS CLI to your account (only the first time). It asks for your Access Key ID, Secret Access Key, region (`us-east-1`) and output format (`json`):
+
+```bash
+aws configure
+```
+
+✅ **Check:**
+
+```bash
+aws sts get-caller-identity
+```
+
+> Shows your account number and user name. An error means the AWS CLI is not connected yet.
+
+---
+
+## Task 1 — Create the key pair
+
+📍 **Where:** 💻 Terminal (any folder)
+
+**Why:** the bastion is locked with this key pair. You keep the private key (the `.pem` file) and use it to `ssh` in.
+
+▶️ **Do:**
+
+```bash
+aws ec2 create-key-pair --key-name abhigna-eks-key --region us-east-1 --query 'KeyMaterial' --output text > ~/.ssh/abhigna-eks-key.pem
+```
+
+```bash
+chmod 400 ~/.ssh/abhigna-eks-key.pem
+```
+
+> `chmod 400` = only you can read the file. `ssh` refuses a key that others can read.
+> Using another key name? Then also change `key_pair_name` in `terraform.tfvars` to the same name.
+
+✅ **Check:**
+
+```bash
+aws ec2 describe-key-pairs --region us-east-1 --key-names abhigna-eks-key --query 'KeyPairs[].KeyName' --output text
+```
+
+> Prints `abhigna-eks-key`.
+
+⚠️ AWS shows the private key **only once**. Don't delete the `.pem` file, and never push it to GitHub.
+
+---
+
+## Task 2 — Get the code
+
+📍 **Where:** 💻 Terminal
+
+**Why:** download the repo and copy the basic EKS code into a new folder. The original stays untouched.
+
+▶️ **Do:**
+
+> Already have the repo? Skip `cd ~` and `git clone`, and start from `cd ~/k8s-eks-projects`.
+
+```bash
+cd ~
+```
+
+```bash
+git clone https://github.com/Abhignadumpala/k8s-eks-projects.git
+```
+
+```bash
+cd ~/k8s-eks-projects
+```
+
+```bash
+mkdir -p 05-production-eks
+```
+
+```bash
+cp -r 01-eks-terraform 05-production-eks/terraform
+```
+
+```bash
+cd ~/k8s-eks-projects/05-production-eks/terraform
+```
+
+✅ **Check:**
+
+```bash
+ls
+```
+
+> You see `bastion.tf  eks.tf  outputs.tf  providers.tf  terraform.tfvars  variables.tf  vpc.tf ...` and **no** `k8s-eks-projects` folder inside.
+
+Open the whole repo in VS Code (you need it in Tasks 5–7):
+
+```bash
+code ~/k8s-eks-projects
+```
+
+> 💡 From now on, every 💻 command runs inside `~/k8s-eks-projects/05-production-eks/terraform`. If you open a new terminal, run that `cd` again first.
+
+---
+
+## Task 3 — Set the new name and version
+
+📍 **Where:** 📝 VS Code
+
+**Why:** give the new cluster its own name, and use Kubernetes **1.36** (1.33 is in extended support and costs 6× more). See *1.1 → We are building a production cluster now*.
+
+▶️ **Do:**
+
+1. In VS Code, open **`05-production-eks/terraform/terraform.tfvars`** (not the one in `01-eks-terraform`).
+2. Change these 3 lines:
+
+| Line | Before | After |
+|---|---|---|
+| 8 | `project_name = "abhigna"` | `project_name = "abhigna-prod"` |
+| 24 | `cluster_name    = "abhigna-cluster"` | `cluster_name    = "abhigna-prod"` |
+| 25 | `cluster_version = "1.33"` | `cluster_version = "1.36"` |
+
+3. Save with `Ctrl+S`. The ● on the tab disappears when the file is saved.
+
+> Leave all other lines as they are. The `nodegroup_name` and `node_*` lines are no longer used (Task 5 replaces the node group), and Terraform doesn't mind unused values.
+
+<details>
+<summary>Alternative: do it from the terminal with <code>sed</code></summary>
+
+`sed -i 's/old/new/' file` finds `old` and replaces it with `new` inside the file. Run these in 💻 the terminal, in `05-production-eks/terraform`:
+
+```bash
+sed -i 's/^project_name = "abhigna"/project_name = "abhigna-prod"/' terraform.tfvars
+```
+
+```bash
+sed -i 's/^cluster_name    = "abhigna-cluster"/cluster_name    = "abhigna-prod"/' terraform.tfvars
+```
+
+```bash
+sed -i 's/^cluster_version = "1.33"/cluster_version = "1.36"/' terraform.tfvars
+```
+
+</details>
+
+✅ **Check:**
+
+```bash
+grep -n "project_name\|cluster_name \|cluster_version" terraform.tfvars
+```
+
+> Shows `abhigna-prod`, `abhigna-prod` and `1.36`.
+
+Want to see which versions are cheap right now? Pick one that says `STANDARD_SUPPORT`:
+
+```bash
+aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text
+```
+
+---
+
+## Task 4 — Match the kubectl version
+
+📍 **Where:** 📝 VS Code
+
+**Why:** the bastion installs `kubectl` on its first boot. It should match the cluster version (1.36).
+
+▶️ **Do:**
+
+1. Open **`05-production-eks/terraform/bastion_bootstrap.sh.tpl`**.
+2. Find **line 30**:
+
+```bash
+curl -LO "https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl"
+```
+
+3. Change `v1.35.0` to `v1.36.0`:
+
+```bash
+curl -LO "https://dl.k8s.io/release/v1.36.0/bin/linux/amd64/kubectl"
+```
+
+4. Save with `Ctrl+S`.
+
+> Lines 7 and 29 still say "v1.35.0" inside comments (lines starting with `#`). Comments are only notes and don't run; you can update them too if you like.
+
+<details>
+<summary>Alternative: do it from the terminal with <code>sed</code></summary>
+
+```bash
+sed -i 's#v1.35.0/bin#v1.36.0/bin#' bastion_bootstrap.sh.tpl
+```
+
+</details>
+
+✅ **Check:**
+
+```bash
+grep -n "dl.k8s.io" bastion_bootstrap.sh.tpl
+```
+
+> The line contains `v1.36.0`.
+
+---
+
+## Task 5 — Two node groups + add-ons (`eks.tf`)
+
+📍 **Where:** 📝 VS Code
+
+**Why:** this is the main production change: a **system** and an **app** node group, the Pod Identity add-on, IMDS hop limit 1 and least-privilege permissions. Every line is explained in *1.3 The new code you will add*.
+
+▶️ **Do:**
+
+1. In VS Code, open **`05-production-eks/terraform/eks.tf`** (not the one in `01-eks-terraform`).
+2. Find **line 33**. It starts with `# EBS CSI driver: lets PVCs create EBS volumes`.
+3. Find **line 86**. It is a closing brace on its own line, just **above** `# Allow the bastion host to reach the cluster API`.
+4. Select lines 33 to 86: click at the start of line 33, then hold `Shift` and click at the end of line 86.
+5. Press `Delete`.
+6. Paste this block in the same place:
+
+```hcl
+  cluster_addons = {
+    eks-pod-identity-agent = { most_recent = true, before_compute = true }
+    aws-ebs-csi-driver     = { most_recent = true }
+  }
+
+  eks_managed_node_group_defaults = {
+    ami_type       = "AL2023_x86_64_STANDARD"
+    instance_types = ["m7i-flex.large"]
+    metadata_options = {
+      http_endpoint               = "enabled"
+      http_tokens                 = "required"
+      http_put_response_hop_limit = 1
+    }
+    iam_role_additional_policies = {
+      AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      AmazonEBSCSIDriverPolicy     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+    }
+  }
+
+  eks_managed_node_groups = {
+    system = {
+      min_size     = 2
+      max_size     = 4
+      desired_size = 2
+      labels       = { role = "system" }
+    }
+    app = {
+      min_size     = 2
+      max_size     = 4
+      desired_size = 2
+      labels       = { role = "app" }
+      taints = {
+        app = { key = "workload", value = "app", effect = "NO_SCHEDULE" }
+      }
+    }
+  }
+```
+
+7. Save with `Ctrl+S`. The ● on the tab disappears when the file is saved.
+
+✅ **Check:**
+
+```bash
+grep -n "system = {\|app = {\|eks-pod-identity-agent\|hop_limit\|remote_access" eks.tf
+```
+
+> Shows `eks-pod-identity-agent`, `hop_limit`, `system = {` and `app = {`. It must **not** show `remote_access` (that belonged to the old node group).
+
+---
+
+## Task 6 — Fix `outputs.tf`
+
+📍 **Where:** 📝 VS Code
+
+**Why:** one output still points to the old node group you just deleted, so Terraform would fail.
+
+▶️ **Do:**
+
+1. Open **`05-production-eks/terraform/outputs.tf`**.
+2. Find this line (around line 42):
+
+```hcl
+  value       = var.nodegroup_name
+```
+
+3. Replace it with:
+
+```hcl
+  value       = keys(module.eks.eks_managed_node_groups)
+```
+
+4. Save with `Ctrl+S`.
+
+✅ **Check:**
+
+```bash
+grep -n "var.nodegroup_name" outputs.tf
+```
+
+> Prints **nothing**. That means the old line is gone.
+
+---
+
+## Task 7 — Create `ecr.tf`
+
+📍 **Where:** 📝 VS Code
+
+**Why:** your private image registry. Later steps push images here and block images from anywhere else.
+
+▶️ **Do:**
+
+1. In the Explorer, right-click the folder **`05-production-eks/terraform`** → **New File** → name it `ecr.tf`.
+2. Paste:
+
+```hcl
+resource "aws_ecr_repository" "app" {
+  for_each             = toset(["prod-frontend", "prod-backend"])
+  name                 = each.value
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = true
+  image_scanning_configuration { scan_on_push = true }
+}
+```
+
+3. Save with `Ctrl+S`.
+
+✅ **Check:**
+
+```bash
+cat ecr.tf
+```
+
+> Shows the code you pasted.
+
+---
+
+## Task 8 — Check the code (free)
+
+📍 **Where:** 💻 Terminal, in `05-production-eks/terraform`
+
+**Why:** find mistakes **before** anything is created in AWS. Nothing in this task costs money.
+
+▶️ **Do:**
 
 ```bash
 terraform init
 ```
 
-> Downloads the AWS plugin (provider) and the VPC/EKS modules into a hidden `.terraform/` folder. Run it once per folder.
+> Downloads the AWS plugin and the VPC/EKS modules. If you see `connection reset by peer`, just run it again.
 
 ```bash
 terraform fmt
 ```
 
-> Tidies the spacing and indentation in all `.tf` files.
+> Tidies the spacing in all `.tf` files.
 
 ```bash
 terraform validate
 ```
 
-> Checks the code for mistakes (typos, missing brackets, wrong names). It must say **Success! The configuration is valid.**
+✅ **Check:** `validate` prints **Success! The configuration is valid.**
+
+> Got an error? It names the file and line. Fix it, or look in *Common problems* at the bottom.
 
 ---
 
-### 1.5 Preview and create (💰 cost starts here)
+## Task 9 — Create everything in AWS (💰 cost starts here)
+
+📍 **Where:** 💻 Terminal, in `05-production-eks/terraform`
+
+**Why:** `plan` shows what will be created; `apply` creates it.
+
+▶️ **Do:**
 
 ```bash
 terraform plan
 ```
 
-> A **preview only**, nothing is created. Scroll through it and check you see: the VPC and subnets, the EKS cluster, node groups `system` and `app`, the 2 add-ons, 2 ECR repositories and the bastion. The last line says `Plan: N to add, 0 to change, 0 to destroy`.
+> A preview only. Check you see the VPC, the EKS cluster, node groups `system` and `app`, the 2 add-ons, 2 ECR repos and the bastion. The last line says `Plan: N to add, 0 to change, 0 to destroy`.
 
 ```bash
 terraform apply
 ```
 
-> Shows the plan again and asks for confirmation: type `yes`. It takes about **20 minutes**; creating the EKS control plane is the slow part. Don't close the terminal.
+> Type `yes`. It takes about **20 minutes**. Don't close the terminal.
+
+✅ **Check:** the last lines say `Apply complete!` and print the outputs (`bastion_public_ip`, `cluster_name = "abhigna-prod"`, `node_groups`...).
 
 ---
 
-### 1.6 ✅ Check that everything works
+## Task 10 — Test the cluster
 
-Print the ssh command for the bastion:
+📍 **Where:** 💻 Terminal first, then 🖥️ the bastion
+
+**Why:** prove that the cluster, both node groups, the taint, the add-ons and ECR all work.
+
+▶️ **Do (💻 laptop):** get the bastion's IP.
 
 ```bash
-terraform output bastion_ssh_command
+terraform output bastion_public_ip
 ```
 
-Connect to the bastion (user is `ubuntu`):
+Log in. The user is `ubuntu`; use the IP you just got:
 
 ```bash
 ssh -i ~/.ssh/abhigna-eks-key.pem ubuntu@<bastion-public-ip>
 ```
 
-> If it says `kubectl: command not found`, the bootstrap script is still running. Wait 2–3 minutes and log in again.
+> `kubectl: command not found`? The setup script is still running. Wait 2–3 minutes, type `exit`, and log in again.
 
-Now, **on the bastion**:
+▶️ **Do (🖥️ bastion):**
 
 ```bash
 kubectl get nodes -L role
 ```
 
-> Expected: **4 nodes**, all `Ready`. 2 show `system` and 2 show `app` in the ROLE column.
+> ✅ 4 nodes, all `Ready`: 2 with ROLE `system`, 2 with ROLE `app`.
 
 ```bash
 kubectl describe nodes -l role=app | grep Taints
 ```
 
-> Expected: both app nodes show `workload=app:NoSchedule`.
+> ✅ Both show `workload=app:NoSchedule`.
 
 ```bash
 kubectl get pods -n kube-system
 ```
 
-> Expected: `eks-pod-identity-agent-...` and `ebs-csi-...` Pods are `Running`.
+> ✅ `eks-pod-identity-agent-...` and `ebs-csi-...` Pods are `Running`.
 
 ```bash
 aws ecr describe-repositories --region us-east-1 --query 'repositories[].repositoryName' --output text
 ```
 
-> Expected: `prod-frontend    prod-backend`
+> ✅ Prints `prod-frontend    prod-backend`.
 
-🎉 If all 4 checks pass, Step 01 is done.
+🎉 All 4 checks pass? **Step 01 is done.**
+
+---
+
+## Task 11 — Delete everything when you stop
+
+📍 **Where:** 💻 Terminal on the laptop, in `05-production-eks/terraform`. **Not** on the bastion: type `exit` to leave it first.
+
+**Why:** the cluster costs about $0.63 every hour, even when you're not using it.
+
+▶️ **Do:**
+
+```bash
+terraform destroy
+```
+
+> Type `yes`. It takes about 15 minutes. Next time, `terraform apply` builds it again exactly the same way.
 
 ---
 
@@ -1477,9 +1681,9 @@ aws ecr describe-repositories --region us-east-1 --query 'repositories[].reposit
 | Error | Why it happens | Fix |
 |---|---|---|
 | `connection reset by peer` during `terraform init` | Network dropped the download | Run `terraform init` again |
-| `InvalidKeyPair.NotFound` | The key pair name in `terraform.tfvars` doesn't exist in us-east-1 | Do step 1.1, or fix `key_pair_name` |
-| `Reference to undeclared ... nodegroup_name` | `outputs.tf` still points to the old node group | Do step 1.3 (d) |
-| `Unsupported Kubernetes version` | The version isn't offered any more | Pick a `STANDARD_SUPPORT` version from step 1.3 (a) |
+| `InvalidKeyPair.NotFound` | The key pair name in `terraform.tfvars` doesn't exist in us-east-1 | Do Task 1, or fix `key_pair_name` |
+| `Reference to undeclared ... nodegroup_name` | `outputs.tf` still points to the old node group | Do Task 6 |
+| `Unsupported Kubernetes version` | The version isn't offered any more | Pick a `STANDARD_SUPPORT` version (see Task 3) |
 | `VcpuLimitExceeded` | Your AWS account's vCPU quota is too low for 5 machines | Request a quota increase in Service Quotas, or set fewer nodes |
 | `ssh: Permission denied (publickey)` | Wrong key file or wrong user | Use `-i ~/.ssh/abhigna-eks-key.pem` and user `ubuntu` |
 | `ssh: Connection timed out` | Your IP isn't allowed in `ssh_allowed_cidr` | Put your current IP from `curl -s ifconfig.me` and `apply` again |
