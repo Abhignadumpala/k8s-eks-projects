@@ -414,6 +414,57 @@ code .
 
 #### `providers.tf`: which cloud and which plugins
 
+```hcl
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.27"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+    cloudinit = {
+      source  = "hashicorp/cloudinit"
+      version = "~> 2.3"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project   = var.project_name
+      ManagedBy = "terraform"
+    }
+  }
+}
+
+# Used by the kubernetes provider to authenticate against the EKS cluster
+# created in this same apply (so kubectl/helm-style resources can be managed
+# directly from Terraform if needed later).
+data "aws_eks_cluster_auth" "this" {
+  name = module.eks.cluster_name
+}
+
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  token                  = data.aws_eks_cluster_auth.this.token
+}
+```
+
+**Explained:**
+
 | Block | What it does |
 |---|---|
 | `required_version = ">= 1.5.0"` | Terraform itself must be version 1.5 or newer |
@@ -428,11 +479,46 @@ code .
 #### `vpc.tf`: the network
 
 ```hcl
+# ───────────────────────────────────────────────
+# VPC + Subnets for EKS
+# Public subnets  → bastion host, NAT gateway, load balancers
+# Private subnets → EKS worker nodes (best practice: nodes never get public IPs)
+# ───────────────────────────────────────────────
+
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  ...
+  version = "~> 5.8"
+
+  name = "${var.project_name}-vpc"
+  cidr = var.vpc_cidr
+
+  azs             = var.azs
+  public_subnets  = var.public_subnet_cidrs
+  private_subnets = var.private_subnet_cidrs
+
+  enable_nat_gateway   = true
+  single_nat_gateway   = true # cost-optimised: one NAT gateway shared across all AZs
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  # Required tags for EKS to auto-discover subnets for load balancers
+  public_subnet_tags = {
+    "kubernetes.io/role/elb"                    = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
+
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb"           = "1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
+
+  tags = {
+    Name = "${var.project_name}-vpc"
+  }
 }
 ```
+
+**Explained:**
 
 | Line | Meaning |
 |---|---|
@@ -453,7 +539,135 @@ module "vpc" {
 
 ---
 
-#### `eks.tf`: the cluster (the parts you keep)
+#### `eks.tf`: the cluster
+
+This is the file as you copied it. The part between `cluster_addons = {` and the end of `eks_managed_node_groups` is the **old node group**: you replace it in step 1.3 (c). Everything else you keep.
+
+```hcl
+# ───────────────────────────────────────────────
+# EKS Cluster + Managed Nodegroup
+# Same as the eksctl way:
+#   eksctl create cluster --name=<cluster> --version <ver> ...
+#   eksctl utils associate-iam-oidc-provider ...
+#   eksctl create nodegroup --cluster=<cluster> ...
+# ───────────────────────────────────────────────
+
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.31"
+
+  cluster_name    = var.cluster_name
+  cluster_version = var.cluster_version
+
+  cluster_endpoint_public_access           = true
+  enable_cluster_creator_admin_permissions = true
+
+  access_entries = {
+    bastion-admin = {
+      principal_arn     = aws_iam_role.bastion.arn
+      type              = "STANDARD"
+      kubernetes_groups = ["bastion-admin"]
+    }
+  }
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+
+  # Equivalent to: eksctl utils associate-iam-oidc-provider --approve
+  enable_irsa = true
+
+  # EBS CSI driver: lets PVCs create EBS volumes (needed for the MySQL StatefulSet
+  # in 04-three-tier-gitops). Node role below has AmazonEBSCSIDriverPolicy.
+  cluster_addons = {
+    aws-ebs-csi-driver = {
+      most_recent = true
+    }
+  }
+
+  eks_managed_node_group_defaults = {
+    ami_type = "AL2023_x86_64_STANDARD"
+  }
+
+  eks_managed_node_groups = {
+    (var.nodegroup_name) = {
+      instance_types = var.node_instance_types
+      capacity_type  = "ON_DEMAND"
+
+      min_size     = var.node_min_size
+      max_size     = var.node_max_size
+      desired_size = var.node_desired_size
+
+      disk_size = var.node_volume_size
+
+      # Disable launch template behavior entirely so remote_access can be passed directly to EKS.
+      create_launch_template     = false
+      use_custom_launch_template = false
+
+      # Equivalent to: --ssh-access --ssh-public-key=abcd
+      remote_access = {
+        ec2_ssh_key               = var.key_pair_name
+        source_security_group_ids = [aws_security_group.bastion_sg.id]
+      }
+
+      # Equivalent to: --asg-access --external-dns-access
+      #                --full-ecr-access --appmesh-access --alb-ingress-access
+      iam_role_additional_policies = {
+        AmazonEKSWorkerNodePolicy            = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+        AmazonEKS_CNI_Policy                 = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+        AmazonEC2ContainerRegistryFullAccess = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
+        AmazonEC2ContainerRegistryReadOnly   = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+        ElasticLoadBalancingFullAccess       = "arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess"
+        AutoScalingFullAccess                = "arn:aws:iam::aws:policy/AutoScalingFullAccess"
+        AmazonEBSCSIDriverPolicy             = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+      }
+
+      labels = {
+        role = "worker"
+      }
+
+      tags = {
+        Name = "${var.project_name}-eks-node"
+      }
+    }
+  }
+
+  # Allow the bastion host to reach the cluster API
+  cluster_security_group_additional_rules = {
+    ingress_from_bastion = {
+      description              = "Allow bastion host to access EKS API"
+      protocol                 = "tcp"
+      from_port                = 443
+      to_port                  = 443
+      type                     = "ingress"
+      source_security_group_id = aws_security_group.bastion_sg.id
+    }
+  }
+
+  tags = {
+    Name = var.cluster_name
+  }
+}
+
+resource "kubernetes_cluster_role_binding" "bastion_admin" {
+  metadata {
+    name = "${var.cluster_name}-bastion-admin"
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = "cluster-admin"
+  }
+
+  subject {
+    kind      = "Group"
+    name      = "bastion-admin"
+    api_group = "rbac.authorization.k8s.io"
+  }
+}
+```
+
+**Explained (the parts you keep):**
 
 | Line | Meaning |
 |---|---|
@@ -490,6 +704,30 @@ bastion EC2 ──IAM role──► access entry (AWS side: "you may log in, gro
 
 ```hcl
 resource "aws_security_group" "bastion_sg" {
+  name        = "${var.cluster_name}-bastion-sg"
+  description = "Security group for the bastion/admin host"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description = "SSH access"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.ssh_allowed_cidr]
+  }
+
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.cluster_name}-bastion-sg"
+  }
+}
 ```
 
 | Line | Meaning |
@@ -504,6 +742,25 @@ resource "aws_security_group" "bastion_sg" {
 
 ```hcl
 resource "aws_iam_role" "bastion" {
+  name = "${var.cluster_name}-bastion-server-role-eks"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.cluster_name}-bastion-server-role-eks"
+  }
+}
 ```
 
 | Line | Meaning |
@@ -513,6 +770,34 @@ resource "aws_iam_role" "bastion" {
 | `Action = "sts:AssumeRole"` | EC2 receives **temporary** credentials for this role. No access keys stored on the bastion |
 
 **3. What the role is allowed to do**
+
+```hcl
+resource "aws_iam_role_policy" "bastion_eks_read" {
+  name = "${var.cluster_name}-bastion-server-eks-read"
+  role = aws_iam_role.bastion.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "eks:DescribeCluster",
+          "eks:ListClusters",
+          "eks:DescribeNodegroup",
+          "eks:ListNodegroups"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "bastion_ecr_readonly" {
+  role       = aws_iam_role.bastion.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+```
 
 | Resource | Gives permission to |
 |---|---|
@@ -525,6 +810,9 @@ resource "aws_iam_role" "bastion" {
 
 ```hcl
 resource "aws_iam_instance_profile" "bastion" {
+  name = "${var.cluster_name}-bastion-profile-eks"
+  role = aws_iam_role.bastion.name
+}
 ```
 
 > An EC2 can't hold an IAM role directly. The **instance profile** is the "holder" that attaches the role to the machine.
@@ -533,6 +821,33 @@ resource "aws_iam_instance_profile" "bastion" {
 
 ```hcl
 resource "aws_instance" "bastion" {
+  ami                    = var.bastion_ami_id
+  instance_type          = var.bastion_instance_type
+  key_name               = var.key_pair_name
+  subnet_id              = module.vpc.public_subnets[0]
+  vpc_security_group_ids = [aws_security_group.bastion_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.bastion.name
+
+  associate_public_ip_address = true
+
+  root_block_device {
+    volume_size           = var.bastion_root_volume_size
+    volume_type           = "gp3"
+    delete_on_termination = true
+    encrypted             = true
+  }
+
+  depends_on = [module.eks]
+
+  user_data = templatefile("${path.module}/bastion_bootstrap.sh.tpl", {
+    aws_region   = var.aws_region
+    cluster_name = var.cluster_name
+  })
+
+  tags = {
+    Name = "${var.cluster_name}-bastion"
+  }
+}
 ```
 
 | Line | Meaning |
@@ -551,6 +866,18 @@ resource "aws_instance" "bastion" {
 
 **6. Outputs**
 
+```hcl
+output "bastion_public_ip" {
+  description = "Public IP of the bastion/admin host — SSH here to run kubectl/eksctl commands"
+  value       = aws_instance.bastion.public_ip
+}
+
+output "bastion_ssh_command" {
+  description = "Ready-to-use SSH command to connect to the bastion host"
+  value       = "ssh -i ${var.key_pair_name}.pem ubuntu@${aws_instance.bastion.public_ip}"
+}
+```
+
 | Output | Prints |
 |---|---|
 | `bastion_public_ip` | The bastion's public IP |
@@ -559,6 +886,108 @@ resource "aws_instance" "bastion" {
 ---
 
 #### `bastion_bootstrap.sh.tpl`: what runs on the bastion's first boot
+
+> The `${aws_region}` and `${cluster_name}` placeholders are filled in by Terraform (`templatefile`) before the script runs. Shown here with kubectl **v1.36.0** (after step 1.3 b).
+
+<details>
+<summary>Show the full script</summary>
+
+```bash
+#!/bin/bash
+# ───────────────────────────────────────────────
+# Bastion Bootstrap Script
+# Automates everything from the original manual STEP-1 and STEP-2:
+#   - apt update + unzip
+#   - AWS CLI v2 installation
+#   - kubectl installation (v1.35.0 to match your original script)
+#   - eksctl installation
+# Runs automatically on first boot via EC2 user_data — no manual SSH needed.
+# ───────────────────────────────────────────────
+set -euo pipefail
+
+LOGFILE="/var/log/bastion-bootstrap.log"
+exec > >(tee -a "$LOGFILE") 2>&1
+
+echo "==== Bastion bootstrap started at $(date) ===="
+
+# STEP 1: System update
+apt-get update -y
+apt-get install -y unzip curl wget tar git jq
+
+# STEP 2a: AWS CLI v2 installation
+cd /tmp
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip -o awscliv2.zip
+./aws/install
+aws --version
+
+# STEP 2b: kubectl installation (matching your specified v1.35.0)
+curl -LO "https://dl.k8s.io/release/v1.36.0/bin/linux/amd64/kubectl"
+chmod +x kubectl
+mv kubectl /usr/local/bin/kubectl
+kubectl version --client
+
+# STEP 2c: eksctl installation
+curl -L "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz" -o eksctl.tar.gz
+tar -xzvf eksctl.tar.gz -C /tmp
+mv /tmp/eksctl /usr/local/bin/eksctl
+eksctl version
+
+# STEP 2d: helm installation (useful for installing add-ons post-cluster-creation)
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Configure kubectl to talk to the cluster created by Terraform automatically
+# When the instance boots, write kubeconfig for ubuntu and verify cluster access.
+mkdir -p /home/ubuntu/.kube /root/.kube
+chown -R ubuntu:ubuntu /home/ubuntu/.kube
+
+export HOME=/home/ubuntu
+export AWS_DEFAULT_REGION="${aws_region}"
+
+retry_count=0
+until aws eks describe-cluster --region "${aws_region}" --name "${cluster_name}" --query "cluster.status" --output text | grep -q "ACTIVE"; do
+  retry_count=$((retry_count + 1))
+  if [ "$retry_count" -ge 40 ]; then
+    echo "Cluster ${cluster_name} is not ACTIVE after $((retry_count * 15)) seconds. Exiting."
+    exit 1
+  fi
+  echo "Waiting for EKS cluster ${cluster_name} to become ACTIVE... (attempt $retry_count)"
+  sleep 15
+done
+
+sudo -u ubuntu bash -lc "HOME=/home/ubuntu AWS_DEFAULT_REGION=${aws_region} aws eks update-kubeconfig --region ${aws_region} --name ${cluster_name}"
+cp /home/ubuntu/.kube/config /root/.kube/config
+chown ubuntu:ubuntu /home/ubuntu/.kube/config
+chmod 600 /home/ubuntu/.kube/config /root/.kube/config
+
+cat > /etc/profile.d/eks-kubeconfig.sh <<EOF
+export AWS_REGION=${aws_region}
+export KUBECONFIG=/home/ubuntu/.kube/config
+alias k='kubectl'
+EOF
+
+cat > /home/ubuntu/.profile <<EOF
+export AWS_REGION=${aws_region}
+export KUBECONFIG=/home/ubuntu/.kube/config
+alias k='kubectl'
+EOF
+
+cat > /root/.profile <<EOF
+export AWS_REGION=${aws_region}
+export KUBECONFIG=/root/.kube/config
+alias k='kubectl'
+EOF
+
+chown ubuntu:ubuntu /home/ubuntu/.profile
+
+echo "==== Bastion bootstrap completed at $(date) ===="
+echo "kubectl config path: /home/ubuntu/.kube/config"
+echo "Run: kubectl get nodes"
+```
+
+</details>
+
+**Explained:**
 
 | Part of the script | What it does |
 |---|---|
@@ -578,6 +1007,194 @@ resource "aws_instance" "bastion" {
 
 #### `variables.tf` and `terraform.tfvars`: settings vs values
 
+Every setting in `variables.tf` looks like this (a name, a description, a type and a default):
+
+```hcl
+variable "cluster_version" {
+  description = "Kubernetes version for the EKS control plane"
+  type        = string
+  default     = "1.33"
+}
+```
+
+| Part | Meaning |
+|---|---|
+| `variable "cluster_version"` | The setting's name. Code uses it as `var.cluster_version` |
+| `description` | What it is for (just for humans) |
+| `type = string` | What kind of value: `string` (text), `number`, `list(string)` (a list of texts) |
+| `default` | Value used if `terraform.tfvars` doesn't set it |
+
+<details>
+<summary>Show the full variables.tf</summary>
+
+```hcl
+variable "aws_region" {
+  description = "AWS region to deploy all resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  description = "Project name used as a prefix for all resources"
+  type        = string
+  default     = "abhigna"
+}
+
+# ───────────────────────────────
+# Bastion / Admin EC2 instance vars
+# ───────────────────────────────
+variable "bastion_ami_id" {
+  description = "Ubuntu 22.04 LTS AMI ID for the bastion/admin host (region-specific, update if changing region)"
+  type        = string
+  default     = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS - us-east-1 (N. Virginia)
+}
+
+variable "bastion_instance_type" {
+  description = "EC2 instance type for the bastion host"
+  type        = string
+  default     = "m7i-flex.large"
+}
+
+variable "bastion_root_volume_size" {
+  description = "Root EBS volume size in GB for the bastion host"
+  type        = number
+  default     = 30
+}
+
+variable "key_pair_name" {
+  description = "Existing EC2 key pair name for SSH access to the bastion host"
+  type        = string
+  default     = "abhigna-eks-key"
+}
+
+variable "ssh_allowed_cidr" {
+  description = "CIDR block allowed to SSH into the bastion host — restrict this to your IP in production"
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+# ───────────────────────────────
+# VPC vars
+# ───────────────────────────────
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "azs" {
+  description = "Availability zones to spread the EKS cluster and subnets across"
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
+}
+
+variable "public_subnet_cidrs" {
+  description = "CIDR blocks for public subnets (one per AZ)"
+  type        = list(string)
+  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+}
+
+variable "private_subnet_cidrs" {
+  description = "CIDR blocks for private subnets (one per AZ) — EKS worker nodes live here"
+  type        = list(string)
+  default     = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+}
+
+# ───────────────────────────────
+# EKS Cluster vars
+# ───────────────────────────────
+variable "cluster_name" {
+  description = "Name of the EKS cluster"
+  type        = string
+  default     = "abhigna-cluster"
+}
+
+variable "cluster_version" {
+  description = "Kubernetes version for the EKS control plane"
+  type        = string
+  default     = "1.33"
+}
+
+# ───────────────────────────────
+# EKS Managed Nodegroup vars
+# ───────────────────────────────
+variable "nodegroup_name" {
+  description = "Name of the EKS managed nodegroup"
+  type        = string
+  default     = "abhigna-cluster-ng-1"
+}
+
+variable "node_instance_types" {
+  description = "EC2 instance types for EKS worker nodes (t3.micro is too small for production EKS — using t3.medium)"
+  type        = list(string)
+  default     = ["m7i-flex.large"]
+}
+
+variable "node_volume_size" {
+  description = "EBS root volume size in GB for each EKS worker node"
+  type        = number
+  default     = 20
+}
+
+variable "node_desired_size" {
+  description = "Desired number of worker nodes"
+  type        = number
+  default     = 2
+}
+
+variable "node_min_size" {
+  description = "Minimum number of worker nodes for autoscaling"
+  type        = number
+  default     = 2
+}
+
+variable "node_max_size" {
+  description = "Maximum number of worker nodes for autoscaling"
+  type        = number
+  default     = 6
+}
+```
+
+</details>
+
+And `terraform.tfvars` gives the real values (shown **after** the 3 changes in step 1.3 a):
+
+```hcl
+# ───────────────────────────────────────────────
+# terraform.tfvars
+# Edit these values before running `terraform apply`.
+# My values for the Day 23 EKS lab.
+# ───────────────────────────────────────────────
+
+aws_region   = "us-east-1"
+project_name = "abhigna-prod"
+
+# Bastion / Admin host — Ubuntu, m7i-flex.large, 30 GB EBS (as requested)
+bastion_ami_id           = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS - us-east-1 (N. Virginia)
+bastion_instance_type    = "m7i-flex.large"
+bastion_root_volume_size = 30
+key_pair_name            = "abhigna-eks-key" # must already exist in your AWS account
+ssh_allowed_cidr         = "0.0.0.0/0"       # restrict to your IP in production, e.g. "203.0.113.10/32"
+
+# Networking
+vpc_cidr             = "10.0.0.0/16"
+azs                  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+# EKS Cluster
+cluster_name    = "abhigna-prod"
+cluster_version = "1.36"
+
+# EKS Managed Nodegroup
+nodegroup_name      = "abhigna-cluster-ng-1"
+node_instance_types = ["m7i-flex.large"] # t3.micro is too small for EKS worker nodes
+node_volume_size    = 20
+node_desired_size   = 2
+node_min_size       = 2
+node_max_size       = 6
+```
+
 ```
 variables.tf          →  "there is a setting called cluster_name, default abhigna-cluster"
 terraform.tfvars      →  "for this project, cluster_name = abhigna-prod"   ← wins
@@ -586,6 +1203,54 @@ terraform.tfvars      →  "for this project, cluster_name = abhigna-prod"   ←
 > Change values in `terraform.tfvars`; leave `variables.tf` alone unless you add a brand-new setting.
 
 #### `outputs.tf`: what you see after `apply`
+
+```hcl
+# ───────────────────────────────────────────────
+# Outputs — everything you need after `terraform apply`
+# ───────────────────────────────────────────────
+
+output "cluster_name" {
+  description = "EKS cluster name"
+  value       = module.eks.cluster_name
+}
+
+output "cluster_endpoint" {
+  description = "EKS cluster API endpoint"
+  value       = module.eks.cluster_endpoint
+}
+
+output "cluster_version" {
+  description = "Kubernetes version running on the EKS control plane"
+  value       = module.eks.cluster_version
+}
+
+output "cluster_security_group_id" {
+  description = "Security group ID attached to the EKS cluster"
+  value       = module.eks.cluster_security_group_id
+}
+
+output "vpc_id" {
+  description = "VPC ID where EKS and the bastion host are deployed"
+  value       = module.vpc.vpc_id
+}
+
+output "oidc_provider_arn" {
+  description = "IAM OIDC provider ARN (equivalent to: eksctl utils associate-iam-oidc-provider)"
+  value       = module.eks.oidc_provider_arn
+}
+
+output "configure_kubectl" {
+  description = "Run this command on the bastion host (or locally) to configure kubectl"
+  value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
+}
+
+output "nodegroup_name" {
+  description = "EKS managed nodegroup name"
+  value       = var.nodegroup_name
+}
+```
+
+**Explained:**
 
 | Output | Use |
 |---|---|
