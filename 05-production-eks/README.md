@@ -283,6 +283,212 @@ What each file does:
 
 ---
 
+### 1.2 (b) Understand the code you copied
+
+Before changing anything, read what the existing code does. Open the folder in VS Code:
+
+```bash
+code .
+```
+
+#### Terraform words you will see
+
+| Word | Example | Meaning |
+|---|---|---|
+| `resource` | `resource "aws_instance" "bastion"` | "Create this thing in AWS". Type = `aws_instance`, my name for it = `bastion` |
+| `module` | `module "vpc"` | Use a ready-made package of resources |
+| `variable` | `var.cluster_name` | A setting whose value comes from `terraform.tfvars` |
+| `output` | `output "bastion_public_ip"` | Print a value after `apply` |
+| `data` | `data "aws_eks_cluster_auth"` | **Read** something that already exists (doesn't create anything) |
+| Reference | `module.vpc.vpc_id` | Use a value from another resource → Terraform creates things **in the right order** |
+| `${...}` | `"${var.cluster_name}-bastion"` | Put a value inside text → `abhigna-prod-bastion` |
+| `jsonencode({...})` | IAM policies | Turn Terraform code into the JSON that AWS expects |
+
+---
+
+#### `providers.tf`: which cloud and which plugins
+
+| Block | What it does |
+|---|---|
+| `required_version = ">= 1.5.0"` | Terraform itself must be version 1.5 or newer |
+| `required_providers { aws, kubernetes, tls, cloudinit }` | Plugins to download in `terraform init`. `aws` talks to AWS, `kubernetes` talks to the cluster |
+| `provider "aws" { region = var.aws_region }` | Create everything in `us-east-1` |
+| `default_tags { Project, ManagedBy }` | Every AWS resource gets these tags automatically → easy to find and to see "this was made by Terraform" |
+| `data "aws_eks_cluster_auth" "this"` | Gets a login token for the new cluster |
+| `provider "kubernetes" { host, cluster_ca_certificate, token }` | Lets Terraform create Kubernetes objects (used for the bastion's RoleBinding in `eks.tf`) |
+
+---
+
+#### `vpc.tf`: the network
+
+```hcl
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  ...
+}
+```
+
+| Line | Meaning |
+|---|---|
+| `source = "terraform-aws-modules/vpc/aws"` | Use the popular, community VPC module from the Terraform Registry |
+| `version = "~> 5.8"` | Any 5.x version from 5.8 up (not 6.0) → updates don't break the code |
+| `cidr = var.vpc_cidr` | IP range of the whole VPC: `10.0.0.0/16` (65,536 addresses) |
+| `azs = var.azs` | Spread across `us-east-1a`, `1b`, `1c` |
+| `public_subnets` | `10.0.1.0/24`, `10.0.2.0/24`, `10.0.3.0/24`: one public subnet per AZ |
+| `private_subnets` | `10.0.101.0/24` ... : one private subnet per AZ, for worker nodes |
+| `enable_nat_gateway = true` | Create a NAT gateway so private nodes can reach the internet (to pull images) |
+| `single_nat_gateway = true` | Only **one** NAT for all 3 AZs → cheaper. *Real production uses one per AZ, so one AZ failing doesn't cut internet for the others* |
+| `enable_dns_hostnames / enable_dns_support` | Machines get DNS names; EKS needs this |
+| `public_subnet_tags: kubernetes.io/role/elb = 1` | Tells AWS "put **internet-facing** load balancers here" |
+| `private_subnet_tags: kubernetes.io/role/internal-elb = 1` | Tells AWS "put **internal** load balancers here" |
+| `kubernetes.io/cluster/<name> = shared` | Tells EKS "these subnets belong to my cluster" |
+
+> Without those subnet tags, a `Service type: LoadBalancer` or an Ingress can't find where to create the load balancer.
+
+---
+
+#### `eks.tf`: the cluster (the parts you keep)
+
+| Line | Meaning |
+|---|---|
+| `source = "terraform-aws-modules/eks/aws"`, `version = "~> 20.31"` | The community EKS module, version 20.x |
+| `cluster_name / cluster_version` | Name and Kubernetes version, from `terraform.tfvars` |
+| `cluster_endpoint_public_access = true` | The API server (what `kubectl` talks to) can be reached from the internet, still protected by login. *Strict production: private endpoint only* |
+| `enable_cluster_creator_admin_permissions = true` | The IAM user who runs `terraform apply` becomes cluster admin. Without it you'd lock yourself out |
+| `access_entries { bastion-admin ... }` | Lets the **bastion's IAM role** log in to the cluster, as the Kubernetes group `bastion-admin` |
+| `vpc_id = module.vpc.vpc_id` | Put the cluster in the VPC from `vpc.tf` |
+| `subnet_ids = module.vpc.private_subnets` | Worker nodes go in the **private** subnets |
+| `enable_irsa = true` | Creates an OIDC provider so Pods can use IAM roles (IRSA, the older way next to Pod Identity) |
+| `cluster_addons`, node groups | **You replace these in step 1.3 (c)** |
+| `cluster_security_group_additional_rules` | Firewall rule: the bastion may call the API server on port **443** |
+| `resource "kubernetes_cluster_role_binding" "bastion_admin"` | Inside Kubernetes: gives the group `bastion-admin` the built-in `cluster-admin` role |
+
+How the bastion gets access, in 2 parts:
+
+```
+bastion EC2 ──IAM role──► access entry (AWS side: "you may log in, group = bastion-admin")
+                                   │
+                                   ▼
+            ClusterRoleBinding (K8s side: "group bastion-admin = cluster-admin")
+```
+
+> **AuthN vs AuthZ:** the access entry answers *"who are you?"* (authentication). The ClusterRoleBinding answers *"what can you do?"* (authorization, RBAC).
+
+---
+
+#### `bastion.tf`: the jump box
+
+**1. Security group (the bastion's firewall)**
+
+```hcl
+resource "aws_security_group" "bastion_sg" {
+```
+
+| Line | Meaning |
+|---|---|
+| `name = "${var.cluster_name}-bastion-sg"` | Name becomes `abhigna-prod-bastion-sg` |
+| `vpc_id = module.vpc.vpc_id` | The firewall belongs to our VPC |
+| `ingress { from_port 22, to_port 22, protocol tcp }` | **Incoming**: allow SSH (port 22) ... |
+| `cidr_blocks = [var.ssh_allowed_cidr]` | ... only from this IP range. `0.0.0.0/0` = anyone; `<your-ip>/32` = only you |
+| `egress { protocol "-1", 0.0.0.0/0 }` | **Outgoing**: allow everything (`-1` = all protocols), so it can download tools |
+
+**2. IAM role (the bastion's AWS identity)**
+
+```hcl
+resource "aws_iam_role" "bastion" {
+```
+
+| Line | Meaning |
+|---|---|
+| `assume_role_policy` | **Trust policy**: *who* may use this role |
+| `Principal = { Service = "ec2.amazonaws.com" }` | Only an EC2 machine may use it |
+| `Action = "sts:AssumeRole"` | EC2 receives **temporary** credentials for this role. No access keys stored on the bastion |
+
+**3. What the role is allowed to do**
+
+| Resource | Gives permission to |
+|---|---|
+| `aws_iam_role_policy "bastion_eks_read"` | `eks:DescribeCluster`, `ListClusters`, `DescribeNodegroup`, `ListNodegroups`. Read-only, just enough for `aws eks update-kubeconfig` |
+| `aws_iam_role_policy_attachment "bastion_ecr_readonly"` | Read (pull) images from ECR, using the AWS managed policy `AmazonEC2ContainerRegistryReadOnly` |
+
+> Permissions in **AWS** (this role) are separate from permissions **inside Kubernetes** (the ClusterRoleBinding in `eks.tf`). You need both.
+
+**4. Instance profile**
+
+```hcl
+resource "aws_iam_instance_profile" "bastion" {
+```
+
+> An EC2 can't hold an IAM role directly. The **instance profile** is the "holder" that attaches the role to the machine.
+
+**5. The EC2 machine**
+
+```hcl
+resource "aws_instance" "bastion" {
+```
+
+| Line | Meaning |
+|---|---|
+| `ami = var.bastion_ami_id` | Operating system image: Ubuntu 22.04 |
+| `instance_type = var.bastion_instance_type` | Machine size: `m7i-flex.large` |
+| `key_name = var.key_pair_name` | The key pair from step 1.1 → you can `ssh` in |
+| `subnet_id = module.vpc.public_subnets[0]` | Place it in the **first public subnet** (`[0]` = first in the list) |
+| `vpc_security_group_ids` | Attach the firewall from part 1 |
+| `iam_instance_profile` | Attach the IAM role from parts 2–4 |
+| `associate_public_ip_address = true` | Give it a public IP so you can reach it from your laptop |
+| `root_block_device { 30 GB, gp3, encrypted }` | Its disk: 30 GB, fast `gp3` type, encrypted |
+| `delete_on_termination = true` | Delete the disk when the machine is deleted (no leftover cost) |
+| `depends_on = [module.eks]` | Create the bastion **after** the cluster, because its first-boot script connects to the cluster |
+| `user_data = templatefile(...)` | Run `bastion_bootstrap.sh.tpl` on first boot, filling in `aws_region` and `cluster_name` |
+
+**6. Outputs**
+
+| Output | Prints |
+|---|---|
+| `bastion_public_ip` | The bastion's public IP |
+| `bastion_ssh_command` | A ready ssh command. It says `-i abhigna-eks-key.pem`, so either run it from `~/.ssh` or use the full path `~/.ssh/abhigna-eks-key.pem` |
+
+---
+
+#### `bastion_bootstrap.sh.tpl`: what runs on the bastion's first boot
+
+| Part of the script | What it does |
+|---|---|
+| `set -euo pipefail` | Stop the script at the first error (don't continue half-broken) |
+| `exec > >(tee -a /var/log/bastion-bootstrap.log)` | Save all output to a log file → if something fails, read this log |
+| `apt-get install unzip curl git jq ...` | Basic tools |
+| AWS CLI v2 install | So the bastion can run `aws` commands |
+| `kubectl` install (v1.36.0) | So it can talk to the cluster |
+| `eksctl` + `helm` install | Extra EKS tool + the Kubernetes package manager |
+| `until aws eks describe-cluster ... ACTIVE` | Wait until the cluster is ready (checks every 15 s, up to 10 min) |
+| `aws eks update-kubeconfig` | Writes `~/.kube/config` → `kubectl` knows which cluster to talk to and how to log in |
+| `/etc/profile.d/...`, `.profile` | Sets `AWS_REGION`, `KUBECONFIG` and the alias `k=kubectl` at every login |
+
+> If `kubectl` doesn't work on the bastion, read the log: `sudo tail -50 /var/log/bastion-bootstrap.log`
+
+---
+
+#### `variables.tf` and `terraform.tfvars`: settings vs values
+
+```
+variables.tf          →  "there is a setting called cluster_name, default abhigna-cluster"
+terraform.tfvars      →  "for this project, cluster_name = abhigna-prod"   ← wins
+```
+
+> Change values in `terraform.tfvars`; leave `variables.tf` alone unless you add a brand-new setting.
+
+#### `outputs.tf`: what you see after `apply`
+
+| Output | Use |
+|---|---|
+| `cluster_name`, `cluster_endpoint`, `cluster_version` | Basic cluster info |
+| `vpc_id`, `cluster_security_group_id` | Needed later (for example, the load balancer controller in a later step) |
+| `oidc_provider_arn` | Needed for IRSA |
+| `configure_kubectl` | The `aws eks update-kubeconfig` command, ready to copy |
+| `nodegroup_name` | **You fix this in step 1.3 (d)** |
+
+---
+
 ### 1.3 Upgrade the code to production
 
 You will edit 4 files and create 1 new one. `nano` is a simple text editor: save with `Ctrl+O` → `Enter`, exit with `Ctrl+X`.
