@@ -7,7 +7,7 @@ Every step explains **what** you are doing and **why**, so you can follow it eve
 
 | Item | Value |
 |---|---|
-| Goal | Go from a basic EKS cluster to a **production-grade** one: highly available, secure, monitored, automated |
+| Goal | Build a **production-grade** EKS cluster and app: highly available, secure, monitored, automated |
 | App | frontend (nginx) → backend (Node.js API) → MySQL database |
 | Cloud | AWS, region `us-east-1` (N. Virginia), spread across 3 Availability Zones |
 | Kubernetes | Amazon EKS, version **1.36** |
@@ -40,7 +40,7 @@ Every step explains **what** you are doing and **why**, so you can follow it eve
 ```
 05-production-eks/
 ├── README.md                    ← you are here (project overview)
-├── terraform/                   ← the infrastructure code you run
+├── terraform/                   ← the production infrastructure code (Terraform)
 └── step-01-infrastructure/
     └── README.md                ← Step 01 guide: what, why, code explained, commands
 ```

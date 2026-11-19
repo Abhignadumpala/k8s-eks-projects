@@ -4,7 +4,7 @@
 
 ## What you will build in this step
 
-**A production-grade EKS cluster**: the network, the cluster, two groups of worker machines, a bastion to manage it, and a private image registry.
+**A production-grade EKS cluster**: the network, the cluster, two groups of worker machines, a bastion to manage it, and a private image registry. All of it is created by the Terraform code in [`../terraform`](../terraform).
 
 ```
                          AWS region us-east-1
@@ -24,9 +24,16 @@
         + EKS control plane (run by AWS)   + 2 ECR repositories
 ```
 
-# Part 1 — Understand (read first)
+This guide has 2 parts:
 
-Read this part once before the lab. It explains **what** you are building and **why**. The lab in Part 2 tells you **exactly what to type**.
+| Part | What you do | Time |
+|---|---|---|
+| **Part 1 — Understand** | Read what each piece is, why it's there, and what every line of code does | ~30 min reading |
+| **Part 2 — 🛠️ Hands-On Lab** | Run the commands, task by task, with a check after each one | ~45 min (20 of it waiting for AWS) |
+
+---
+
+# Part 1 — Understand (read first)
 
 ## 1.1 Concepts
 
@@ -56,61 +63,46 @@ Read this part once before the lab. It explains **what** you are building and **
 | No history of what changed | Code lives in Git: every change is saved and reviewed |
 | Deleting = clicking 30 screens, easy to forget something | `terraform destroy` deletes everything, so no surprise bill |
 
-The 4 Terraform commands you will use:
+The Terraform commands you will use:
 
 | Command | What it does | Costs money? |
 |---|---|---|
 | `terraform init` | Downloads the plugins and modules the code needs | No |
+| `terraform fmt` | Tidies the spacing in the `.tf` files | No |
 | `terraform validate` | Checks the code for mistakes | No |
 | `terraform plan` | Shows what **would** be created (a preview) | No |
 | `terraform apply` | Actually creates everything in AWS | **Yes** |
+| `terraform destroy` | Deletes everything it created | Stops the cost |
 
-### We are building a production cluster now
+### What makes this cluster "production-grade"?
 
-👉 **In this step you build a production-grade EKS cluster.** Not a practice cluster.
+A simple practice cluster **works**, but it isn't how companies run Kubernetes. This code already includes the 10 things below. Nothing to change: you just need to understand them.
 
-To save time, you don't write it from zero. You start from a **basic EKS cluster** that already works ([01-eks-terraform](../../01-eks-terraform)) and **upgrade it to production** by changing 10 things.
-
-```
- Basic cluster (practice)               Production cluster (what we build now)
- ───────────────────────                ──────────────────────────────────────
- works, but:                            works, AND:
-  - old, expensive version               - new version, cheaper
-  - one group of machines for all        - separate machines for tools and app
-  - Pods can borrow node permissions     - Pods can't borrow node permissions
-  - SSH keys, FullAccess policies        - no SSH keys, only needed permissions
-  - images on public Docker Hub          - images in private ECR, scanned
-```
-
-The 10 changes (you make them in the Part 2 lab, Tasks 3–7):
-
-| # | Topic | Basic cluster (before) | Production cluster (now) | Why it matters |
+| # | Topic | Practice cluster | This production cluster | Why it matters |
 |---|---|---|---|---|
-| 1 | **EKS version** | 1.33 | **1.36** | Old versions go into *extended support* and the control plane costs **$0.60/hr instead of $0.10/hr** (6×) |
-| 2 | **Cluster name** | `abhigna-cluster` | `abhigna-prod` | A new name, so it never clashes with an older cluster |
-| 3 | **kubectl version** | 1.35 | 1.36 | `kubectl` should match the cluster version (±1 is allowed) |
+| 1 | **EKS version** | Any version, often old | **1.36**, in standard support | Old versions go into *extended support*: the control plane costs **$0.60/hr instead of $0.10/hr** (6×) |
+| 2 | **Spread** | 1 AZ | **3 AZs** | If one data center fails, the others keep running |
+| 3 | **Node placement** | Public subnets | **Private subnets** | Nobody on the internet can reach the nodes directly |
 | 4 | **Node groups** | 1 group runs everything | **system** group + **app** group | Cluster tools (monitoring, Argo CD) can't steal CPU/RAM from your app, and the other way round |
 | 5 | **Taint on app nodes** | none | `workload=app:NoSchedule` | A "keep out" sign: only app Pods are allowed on app nodes |
-| 6 | **Pod Identity agent** | not installed | installed | Lets Pods get **temporary** AWS access instead of storing access keys (used in Step 05) |
+| 6 | **Pod Identity agent** | not installed | installed | Pods get **temporary** AWS access instead of stored access keys (used in Step 05) |
 | 7 | **Instance metadata (IMDS)** | default | IMDSv2, hop limit **1** | Stops a Pod from secretly using the node's AWS permissions |
 | 8 | **Logging in to nodes** | SSH key | **SSM Session Manager** | No open SSH port and no key that can leak |
 | 9 | **Node permissions** | many `FullAccess` policies | only what is needed | *Least privilege*: if a node is hacked, the attacker gets very little |
-| 10 | **Image registry** | Docker Hub | **ECR**, immutable tags, scan on push | Images stay in your own AWS account and are scanned for vulnerabilities |
+| 10 | **Image registry** | public Docker Hub | **ECR**, immutable tags, scan on push | Images stay in your own AWS account and are scanned for vulnerabilities |
 
-#### The 10 changes in plain words
+#### The 10 points in plain words
 
-1. **EKS version:** AWS charges more for old Kubernetes versions. 1.33 is old now, so we use 1.36 (new and cheap).
-2. **Cluster name:** a different name so the new cluster doesn't get mixed up with an old one.
-3. **kubectl version:** `kubectl` is the tool that talks to the cluster. Tool and cluster should be the same version, like an app and its phone OS.
-4. **Node groups:** before, one group of machines ran your app *and* the cluster tools. If monitoring used a lot of CPU, your app got slow. Now the **system** machines run the tools and the **app** machines run only your app, like separate kitchens for staff and customers.
+1. **EKS version:** AWS charges more for old Kubernetes versions, so we use a new one (1.36).
+2. **3 AZs:** the cluster lives in 3 separate data centers. One can go down and the app keeps running.
+3. **Private subnets:** the worker machines have no public IP. They can go out (through NAT), but nobody can come in.
+4. **Node groups:** the **system** machines run the cluster tools, the **app** machines run only your app, like separate kitchens for staff and customers.
 5. **Taint:** a "keep out" sign on the app machines. Only Pods that carry a matching pass (a *toleration*) can go there, and only your app has that pass.
-6. **Pod Identity agent:** your backend will need AWS access (for example, to read the DB password). The bad way is putting AWS keys in the Pod. Pod Identity gives the Pod **temporary** access that expires on its own.
-7. **IMDS hop limit 1:** every AWS machine has an internal address where it can ask "what are my AWS permissions?". A Pod could ask the same question and borrow the machine's permissions. Hop limit 1 means only the machine gets the answer, not the Pods.
-8. **SSM instead of SSH:** logging in with SSH needs an open port and a key file that can leak. SSM needs neither, and AWS records every login.
-9. **Least privilege:** before, the machines had lots of "FullAccess" permissions, so a hacker who got in could do a lot. Now they get only what they need.
-10. **ECR:** your private image registry in AWS. Every image is scanned for security holes, and a tag like `v1` can never be overwritten with a different image.
-
-> **In one line:** the basic cluster *works*. The production cluster *works, is cheaper, is safer and is organised*.
+6. **Pod Identity agent:** your backend will need AWS access (for example, to read the DB password). Instead of putting AWS keys in the Pod, Pod Identity gives it **temporary** access that expires on its own.
+7. **IMDS hop limit 1:** every AWS machine has an internal address where it can ask "what are my AWS permissions?". A Pod could ask the same question and borrow the machine's permissions. Hop limit 1 means only the machine gets the answer.
+8. **SSM instead of SSH:** SSH needs an open port and a key file that can leak. SSM needs neither, and AWS records every login.
+9. **Least privilege:** the machines get only the permissions they need, so a hacker who gets in can do very little.
+10. **ECR:** your private image registry in AWS. Every image is scanned, and a tag like `v1` can never be overwritten with a different image.
 
 ### System vs app node groups
 
@@ -217,26 +209,44 @@ What the bastion **cannot** do in AWS: create or delete EC2 machines, change IAM
 
 ## 1.2 The code, file by file
 
-The lab starts from a basic EKS setup that already works ([01-eks-terraform](../../01-eks-terraform)). Here is every file in it, with its code and what each line does.
+All the code is in [`05-production-eks/terraform/`](../terraform):
+
+```
+05-production-eks/terraform/
+├── providers.tf               which cloud, region and plugins
+├── variables.tf               the list of settings (with defaults)
+├── terraform.tfvars           YOUR values for those settings  ← the only file you edit
+├── vpc.tf                     network: VPC, subnets, NAT
+├── eks.tf                     the cluster, 2 node groups, add-ons
+├── bastion.tf                 the admin jump box + its IAM role
+├── bastion_bootstrap.sh.tpl   script that sets up the bastion on first boot
+├── ecr.tf                     2 private image repositories
+└── outputs.tf                 values printed after apply
+```
 
 ### Terraform words you will see
 
 | Word | Example | Meaning |
 |---|---|---|
 | `resource` | `resource "aws_instance" "bastion"` | "Create this thing in AWS". Type = `aws_instance`, my name for it = `bastion` |
-| `module` | `module "vpc"` | Use a ready-made package of resources |
+| `module` | `module "vpc"` | Use a ready-made package of resources, so you don't write 500 lines yourself |
 | `variable` | `var.cluster_name` | A setting whose value comes from `terraform.tfvars` |
 | `output` | `output "bastion_public_ip"` | Print a value after `apply` |
-| `data` | `data "aws_eks_cluster_auth"` | **Read** something that already exists (doesn't create anything) |
+| `data` | `data "aws_eks_cluster_auth"` | **Read** something that already exists (creates nothing) |
 | Reference | `module.vpc.vpc_id` | Use a value from another resource → Terraform creates things **in the right order** |
 | `${...}` | `"${var.cluster_name}-bastion"` | Put a value inside text → `abhigna-prod-bastion` |
 | `jsonencode({...})` | IAM policies | Turn Terraform code into the JSON that AWS expects |
+| `#` | `# comment` | A note for humans. Terraform ignores it |
 
 ---
 
 ### `providers.tf`: which cloud and which plugins
 
 ```hcl
+# ───────────────────────────────────────────────
+# providers.tf: which cloud, which region, which plugins
+# ───────────────────────────────────────────────
+
 terraform {
   required_version = ">= 1.5.0"
 
@@ -263,6 +273,7 @@ terraform {
 provider "aws" {
   region = var.aws_region
 
+  # Every AWS resource gets these tags automatically
   default_tags {
     tags = {
       Project   = var.project_name
@@ -271,9 +282,8 @@ provider "aws" {
   }
 }
 
-# Used by the kubernetes provider to authenticate against the EKS cluster
-# created in this same apply (so kubectl/helm-style resources can be managed
-# directly from Terraform if needed later).
+# Login token for the new cluster, so Terraform can create Kubernetes objects
+# (the bastion's ClusterRoleBinding in eks.tf)
 data "aws_eks_cluster_auth" "this" {
   name = module.eks.cluster_name
 }
@@ -291,10 +301,198 @@ provider "kubernetes" {
 |---|---|
 | `required_version = ">= 1.5.0"` | Terraform itself must be version 1.5 or newer |
 | `required_providers { aws, kubernetes, tls, cloudinit }` | Plugins to download in `terraform init`. `aws` talks to AWS, `kubernetes` talks to the cluster |
+| `version = "~> 5.0"` | Any 5.x version (not 6.0), so a big new release can't break the code |
 | `provider "aws" { region = var.aws_region }` | Create everything in `us-east-1` |
-| `default_tags { Project, ManagedBy }` | Every AWS resource gets these tags automatically → easy to find and to see "this was made by Terraform" |
+| `default_tags { Project, ManagedBy }` | Every AWS resource gets these tags automatically → easy to find, and you can see it was made by Terraform |
 | `data "aws_eks_cluster_auth" "this"` | Gets a login token for the new cluster |
-| `provider "kubernetes" { host, cluster_ca_certificate, token }` | Lets Terraform create Kubernetes objects (used for the bastion's RoleBinding in `eks.tf`) |
+| `provider "kubernetes" { host, cluster_ca_certificate, token }` | Lets Terraform create Kubernetes objects (the bastion's RoleBinding in `eks.tf`) |
+
+---
+
+### `variables.tf`: the settings
+
+```hcl
+# ───────────────────────────────────────────────
+# variables.tf: the list of settings and their default values.
+# Put YOUR values in terraform.tfvars (it overrides these defaults).
+# ───────────────────────────────────────────────
+
+variable "aws_region" {
+  description = "AWS region for all resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  description = "Prefix for resource names and tags"
+  type        = string
+  default     = "abhigna-prod"
+}
+
+# ── Bastion ──────────────────────────────────────
+variable "bastion_ami_id" {
+  description = "Ubuntu 22.04 AMI for the bastion (region-specific)"
+  type        = string
+  default     = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS, us-east-1
+}
+
+variable "bastion_instance_type" {
+  description = "EC2 size of the bastion"
+  type        = string
+  default     = "m7i-flex.large"
+}
+
+variable "bastion_root_volume_size" {
+  description = "Bastion disk size in GB"
+  type        = number
+  default     = 30
+}
+
+variable "key_pair_name" {
+  description = "Existing EC2 key pair used to SSH into the bastion"
+  type        = string
+  default     = "abhigna-eks-key"
+}
+
+variable "ssh_allowed_cidr" {
+  description = "Who may SSH to the bastion. Best: your IP only, like 203.0.113.10/32"
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+# ── Network ──────────────────────────────────────
+variable "vpc_cidr" {
+  description = "IP range of the whole VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "azs" {
+  description = "3 Availability Zones for high availability"
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
+}
+
+variable "public_subnet_cidrs" {
+  description = "One public subnet per AZ: bastion, NAT gateway, internet-facing load balancers"
+  type        = list(string)
+  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+}
+
+variable "private_subnet_cidrs" {
+  description = "One private subnet per AZ: worker nodes (no public IPs)"
+  type        = list(string)
+  default     = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+}
+
+# ── EKS cluster ──────────────────────────────────
+variable "cluster_name" {
+  description = "Name of the EKS cluster"
+  type        = string
+  default     = "abhigna-prod"
+}
+
+variable "cluster_version" {
+  description = "Kubernetes version. Must be in STANDARD support (extended support costs 6x)"
+  type        = string
+  default     = "1.36"
+}
+
+# ── Node groups ──────────────────────────────────
+variable "node_instance_types" {
+  description = "EC2 size for worker nodes (2 vCPU, 8 GB RAM)"
+  type        = list(string)
+  default     = ["m7i-flex.large"]
+}
+
+variable "system_nodes" {
+  description = "System node group size: runs cluster tools (CoreDNS, Argo CD, monitoring...)"
+  type        = object({ min = number, max = number, desired = number })
+  default     = { min = 2, max = 4, desired = 2 }
+}
+
+variable "app_nodes" {
+  description = "App node group size: runs only the application Pods"
+  type        = object({ min = number, max = number, desired = number })
+  default     = { min = 2, max = 4, desired = 2 }
+}
+
+# ── ECR ──────────────────────────────────────────
+variable "ecr_repos" {
+  description = "Private image repositories for the app"
+  type        = list(string)
+  default     = ["prod-frontend", "prod-backend"]
+}
+```
+
+**Explained:** every setting has the same 4 parts:
+
+| Part | Example | Meaning |
+|---|---|---|
+| `variable "..."` | `variable "cluster_version"` | The setting's name. Code uses it as `var.cluster_version` |
+| `description` | `"Kubernetes version..."` | What it's for (for humans) |
+| `type` | `string`, `number`, `list(string)` | What kind of value: text, a number, a list of texts |
+| `type = object({...})` | `object({ min = number, max = number, desired = number })` | A small group of values together, like `{ min = 2, max = 4, desired = 2 }` |
+| `default` | `"1.36"` | The value used if `terraform.tfvars` doesn't set it |
+
+---
+
+### `terraform.tfvars`: your values
+
+```hcl
+# ───────────────────────────────────────────────
+# terraform.tfvars: YOUR values. This is the only file you need to edit.
+# ───────────────────────────────────────────────
+
+aws_region   = "us-east-1"
+project_name = "abhigna-prod"
+
+# Bastion
+bastion_ami_id           = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS, us-east-1
+bastion_instance_type    = "m7i-flex.large"
+bastion_root_volume_size = 30
+key_pair_name            = "abhigna-eks-key" # the key pair you created (Lab Task 1)
+ssh_allowed_cidr         = "0.0.0.0/0"       # safer: "<your-ip>/32"  (find it: curl -s ifconfig.me)
+
+# Network: 3 AZs
+vpc_cidr             = "10.0.0.0/16"
+azs                  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+# EKS
+cluster_name    = "abhigna-prod"
+cluster_version = "1.36"
+
+# Node groups
+node_instance_types = ["m7i-flex.large"]
+system_nodes        = { min = 2, max = 4, desired = 2 }
+app_nodes           = { min = 2, max = 4, desired = 2 }
+
+# ECR
+ecr_repos = ["prod-frontend", "prod-backend"]
+```
+
+**Explained:**
+
+```
+variables.tf        →  "there is a setting called cluster_name, default abhigna-prod"
+terraform.tfvars    →  "for MY project, cluster_name = abhigna-prod"     ← this one wins
+```
+
+| Setting | Value | What it controls |
+|---|---|---|
+| `aws_region` | `us-east-1` | Where everything is created |
+| `project_name` | `abhigna-prod` | Prefix for names and tags |
+| `bastion_*` | Ubuntu 22.04, `m7i-flex.large`, 30 GB | The bastion machine |
+| `key_pair_name` | `abhigna-eks-key` | The key pair you create in Lab Task 1. **Must match** |
+| `ssh_allowed_cidr` | `0.0.0.0/0` | Who may SSH to the bastion. `0.0.0.0/0` = anyone; `<your-ip>/32` = only you (safer) |
+| `vpc_cidr`, `*_subnet_cidrs` | `10.0.0.0/16`, 3 public + 3 private | The network ranges |
+| `azs` | `1a`, `1b`, `1c` | The 3 Availability Zones |
+| `cluster_name`, `cluster_version` | `abhigna-prod`, `1.36` | The cluster |
+| `node_instance_types` | `m7i-flex.large` | Worker size: 2 vCPU, 8 GB RAM |
+| `system_nodes`, `app_nodes` | `{ min = 2, max = 4, desired = 2 }` | Each group starts with 2 nodes, never fewer than 2, never more than 4 |
+| `ecr_repos` | `prod-frontend`, `prod-backend` | The 2 image repositories |
 
 ---
 
@@ -302,9 +500,9 @@ provider "kubernetes" {
 
 ```hcl
 # ───────────────────────────────────────────────
-# VPC + Subnets for EKS
-# Public subnets  → bastion host, NAT gateway, load balancers
-# Private subnets → EKS worker nodes (best practice: nodes never get public IPs)
+# vpc.tf: the network
+#   public subnets  → bastion, NAT gateway, internet-facing load balancers
+#   private subnets → worker nodes (never get public IPs)
 # ───────────────────────────────────────────────
 
 module "vpc" {
@@ -319,11 +517,11 @@ module "vpc" {
   private_subnets = var.private_subnet_cidrs
 
   enable_nat_gateway   = true
-  single_nat_gateway   = true # cost-optimised: one NAT gateway shared across all AZs
+  single_nat_gateway   = true # one NAT to save cost; real production: one per AZ
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  # Required tags for EKS to auto-discover subnets for load balancers
+  # Tags that tell AWS where to create load balancers
   public_subnet_tags = {
     "kubernetes.io/role/elb"                    = "1"
     "kubernetes.io/cluster/${var.cluster_name}" = "shared"
@@ -344,18 +542,19 @@ module "vpc" {
 
 | Line | Meaning |
 |---|---|
-| `source = "terraform-aws-modules/vpc/aws"` | Use the popular, community VPC module from the Terraform Registry |
-| `version = "~> 5.8"` | Any 5.x version from 5.8 up (not 6.0) → updates don't break the code |
+| `source = "terraform-aws-modules/vpc/aws"` | Use the popular community VPC module from the Terraform Registry |
+| `version = "~> 5.8"` | Any 5.x version from 5.8 up (not 6.0) |
+| `name = "${var.project_name}-vpc"` | The VPC is named `abhigna-prod-vpc` |
 | `cidr = var.vpc_cidr` | IP range of the whole VPC: `10.0.0.0/16` (65,536 addresses) |
 | `azs = var.azs` | Spread across `us-east-1a`, `1b`, `1c` |
 | `public_subnets` | `10.0.1.0/24`, `10.0.2.0/24`, `10.0.3.0/24`: one public subnet per AZ |
-| `private_subnets` | `10.0.101.0/24` ... : one private subnet per AZ, for worker nodes |
-| `enable_nat_gateway = true` | Create a NAT gateway so private nodes can reach the internet (to pull images) |
-| `single_nat_gateway = true` | Only **one** NAT for all 3 AZs → cheaper. *Real production uses one per AZ, so one AZ failing doesn't cut internet for the others* |
+| `private_subnets` | `10.0.101.0/24` ...: one private subnet per AZ, for worker nodes |
+| `enable_nat_gateway = true` | Create a NAT gateway, so private nodes can reach the internet (to pull images) |
+| `single_nat_gateway = true` | Only **one** NAT for all 3 AZs → cheaper. *Strict production uses one per AZ, so one AZ failing doesn't cut the internet for the others* |
 | `enable_dns_hostnames / enable_dns_support` | Machines get DNS names; EKS needs this |
-| `public_subnet_tags: kubernetes.io/role/elb = 1` | Tells AWS "put **internet-facing** load balancers here" |
-| `private_subnet_tags: kubernetes.io/role/internal-elb = 1` | Tells AWS "put **internal** load balancers here" |
-| `kubernetes.io/cluster/<name> = shared` | Tells EKS "these subnets belong to my cluster" |
+| `kubernetes.io/role/elb = 1` (public) | Tells AWS: put **internet-facing** load balancers here |
+| `kubernetes.io/role/internal-elb = 1` (private) | Tells AWS: put **internal** load balancers here |
+| `kubernetes.io/cluster/<name> = shared` | Tells EKS: these subnets belong to my cluster |
 
 > Without those subnet tags, a `Service type: LoadBalancer` or an Ingress can't find where to create the load balancer.
 
@@ -363,15 +562,14 @@ module "vpc" {
 
 ### `eks.tf`: the cluster
 
-This is the file as you copied it. The part between `cluster_addons = {` and the end of `eks_managed_node_groups` is the **old node group**: you replace it in Lab Task 5. Everything else you keep.
-
 ```hcl
 # ───────────────────────────────────────────────
-# EKS Cluster + Managed Nodegroup
-# Same as the eksctl way:
-#   eksctl create cluster --name=<cluster> --version <ver> ...
-#   eksctl utils associate-iam-oidc-provider ...
-#   eksctl create nodegroup --cluster=<cluster> ...
+# eks.tf: the EKS cluster, production layout
+#   - worker nodes in private subnets across 3 AZs
+#   - 2 node groups: system (cluster tools) and app (tainted, app Pods only)
+#   - Pod Identity agent: Pods get temporary AWS credentials, no access keys
+#   - IMDSv2 with hop limit 1: Pods can't borrow the node's IAM role
+#   - SSM instead of SSH keys on nodes, least-privilege node permissions
 # ───────────────────────────────────────────────
 
 module "eks" {
@@ -381,9 +579,13 @@ module "eks" {
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version
 
-  cluster_endpoint_public_access           = true
+  # kubectl can reach the API server from the internet (login still required)
+  cluster_endpoint_public_access = true
+
+  # The IAM user who runs terraform apply becomes cluster admin
   enable_cluster_creator_admin_permissions = true
 
+  # The bastion's IAM role may log in to the cluster as group "bastion-admin"
   access_entries = {
     bastion-admin = {
       principal_arn     = aws_iam_role.bastion.arn
@@ -395,65 +597,68 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  # Equivalent to: eksctl utils associate-iam-oidc-provider --approve
+  # OIDC provider, so tools that use IRSA also work
   enable_irsa = true
 
-  # EBS CSI driver: lets PVCs create EBS volumes (needed for the MySQL StatefulSet
-  # in 04-three-tier-gitops). Node role below has AmazonEBSCSIDriverPolicy.
+  # Add-ons that EKS installs and keeps updated
   cluster_addons = {
+    eks-pod-identity-agent = {
+      most_recent    = true
+      before_compute = true # installed before nodes join
+    }
     aws-ebs-csi-driver = {
-      most_recent = true
+      most_recent = true # creates EBS disks for PVCs (MySQL)
     }
   }
 
+  # Settings shared by both node groups
   eks_managed_node_group_defaults = {
-    ami_type = "AL2023_x86_64_STANDARD"
+    ami_type       = "AL2023_x86_64_STANDARD"
+    instance_types = var.node_instance_types
+
+    # IMDSv2 only, hop limit 1 → Pods can't reach the node's metadata (and its IAM role)
+    metadata_options = {
+      http_endpoint               = "enabled"
+      http_tokens                 = "required"
+      http_put_response_hop_limit = 1
+    }
+
+    # Only what's needed on top of the module's defaults (worker, CNI, ECR read-only)
+    iam_role_additional_policies = {
+      AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      AmazonEBSCSIDriverPolicy     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+    }
   }
 
   eks_managed_node_groups = {
-    (var.nodegroup_name) = {
-      instance_types = var.node_instance_types
-      capacity_type  = "ON_DEMAND"
+    # Cluster tools: CoreDNS, Argo CD, Kyverno, Prometheus, Istio
+    system = {
+      min_size     = var.system_nodes.min
+      max_size     = var.system_nodes.max
+      desired_size = var.system_nodes.desired
 
-      min_size     = var.node_min_size
-      max_size     = var.node_max_size
-      desired_size = var.node_desired_size
+      labels = { role = "system" }
+    }
 
-      disk_size = var.node_volume_size
+    # Only the application. The taint keeps everything else out.
+    app = {
+      min_size     = var.app_nodes.min
+      max_size     = var.app_nodes.max
+      desired_size = var.app_nodes.desired
 
-      # Disable launch template behavior entirely so remote_access can be passed directly to EKS.
-      create_launch_template     = false
-      use_custom_launch_template = false
+      labels = { role = "app" }
 
-      # Equivalent to: --ssh-access --ssh-public-key=abcd
-      remote_access = {
-        ec2_ssh_key               = var.key_pair_name
-        source_security_group_ids = [aws_security_group.bastion_sg.id]
-      }
-
-      # Equivalent to: --asg-access --external-dns-access
-      #                --full-ecr-access --appmesh-access --alb-ingress-access
-      iam_role_additional_policies = {
-        AmazonEKSWorkerNodePolicy            = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-        AmazonEKS_CNI_Policy                 = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-        AmazonEC2ContainerRegistryFullAccess = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
-        AmazonEC2ContainerRegistryReadOnly   = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-        ElasticLoadBalancingFullAccess       = "arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess"
-        AutoScalingFullAccess                = "arn:aws:iam::aws:policy/AutoScalingFullAccess"
-        AmazonEBSCSIDriverPolicy             = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-      }
-
-      labels = {
-        role = "worker"
-      }
-
-      tags = {
-        Name = "${var.project_name}-eks-node"
+      taints = {
+        app = {
+          key    = "workload"
+          value  = "app"
+          effect = "NO_SCHEDULE"
+        }
       }
     }
   }
 
-  # Allow the bastion host to reach the cluster API
+  # Firewall rule: the bastion may call the API server on port 443
   cluster_security_group_additional_rules = {
     ingress_from_bastion = {
       description              = "Allow bastion host to access EKS API"
@@ -470,6 +675,7 @@ module "eks" {
   }
 }
 
+# Inside Kubernetes: group "bastion-admin" gets the built-in cluster-admin role
 resource "kubernetes_cluster_role_binding" "bastion_admin" {
   metadata {
     name = "${var.cluster_name}-bastion-admin"
@@ -489,19 +695,32 @@ resource "kubernetes_cluster_role_binding" "bastion_admin" {
 }
 ```
 
-**Explained (the parts you keep):**
+**Explained:**
 
 | Line | Meaning |
 |---|---|
 | `source = "terraform-aws-modules/eks/aws"`, `version = "~> 20.31"` | The community EKS module, version 20.x |
-| `cluster_name / cluster_version` | Name and Kubernetes version, from `terraform.tfvars` |
-| `cluster_endpoint_public_access = true` | The API server (what `kubectl` talks to) can be reached from the internet, still protected by login. *Strict production: private endpoint only* |
-| `enable_cluster_creator_admin_permissions = true` | The IAM user who runs `terraform apply` becomes cluster admin. Without it you'd lock yourself out |
+| `cluster_name / cluster_version` | `abhigna-prod`, `1.36`, from `terraform.tfvars` |
+| `cluster_endpoint_public_access = true` | The API server (what `kubectl` talks to) can be reached from the internet, still protected by login. *Strictest production: private endpoint only* |
+| `enable_cluster_creator_admin_permissions = true` | Whoever runs `terraform apply` becomes cluster admin. Without it you'd lock yourself out |
 | `access_entries { bastion-admin ... }` | Lets the **bastion's IAM role** log in to the cluster, as the Kubernetes group `bastion-admin` |
-| `vpc_id = module.vpc.vpc_id` | Put the cluster in the VPC from `vpc.tf` |
-| `subnet_ids = module.vpc.private_subnets` | Worker nodes go in the **private** subnets |
-| `enable_irsa = true` | Creates an OIDC provider so Pods can use IAM roles (IRSA, the older way next to Pod Identity) |
-| `cluster_addons`, node groups | **You replace these in Lab Task 5** |
+| `vpc_id`, `subnet_ids = module.vpc.private_subnets` | The cluster lives in our VPC; worker nodes go in the **private** subnets |
+| `enable_irsa = true` | Creates an OIDC provider, so tools that use IRSA (the older way, next to Pod Identity) also work |
+| `cluster_addons` | Add-ons that EKS installs and keeps updated for you |
+| `eks-pod-identity-agent` | Runs on every node and hands out **temporary** AWS credentials to Pods |
+| `before_compute = true` | Installed **before** the nodes start, so every node has it from minute one |
+| `aws-ebs-csi-driver` | Creates an EBS disk when a Pod asks for storage. MySQL needs it to save data |
+| `eks_managed_node_group_defaults` | Settings shared by **both** node groups, written once |
+| `ami_type = "AL2023_x86_64_STANDARD"` | The nodes' operating system: Amazon Linux 2023 |
+| `instance_types = var.node_instance_types` | Machine size: `m7i-flex.large` (2 vCPU, 8 GB RAM) |
+| `http_tokens = "required"` | IMDSv2 only (needs a session token; safer than v1) |
+| `http_put_response_hop_limit = 1` | The metadata answer can't reach Pods (see *What is IMDS*) |
+| `AmazonSSMManagedInstanceCore` | Log in to a node through AWS SSM, without SSH keys |
+| `AmazonEBSCSIDriverPolicy` | Permission to create EBS disks. *On the node role for now; Step 05 moves it to Pod Identity* |
+| `system = { ... }` | Node group for cluster tools. Size from `var.system_nodes` (2 → 4) |
+| `labels = { role = "system" }` | Puts the label `role=system` on these nodes |
+| `app = { ... }` | Node group for the application. Size from `var.app_nodes` (2 → 4) |
+| `taints = { ... NO_SCHEDULE }` | Puts `workload=app:NoSchedule` on app nodes: no Pod lands there without a matching toleration |
 | `cluster_security_group_additional_rules` | Firewall rule: the bastion may call the API server on port **443** |
 | `resource "kubernetes_cluster_role_binding" "bastion_admin"` | Inside Kubernetes: gives the group `bastion-admin` the built-in `cluster-admin` role |
 
@@ -520,11 +739,16 @@ bastion EC2 ──IAM role──► access entry (AWS side: "you may log in, gro
 
 ### `bastion.tf`: the jump box
 
-> **Why** we create it and **what** we do with it is explained in Concepts → *The bastion*. Here is how the code builds it.
-
-**1. Security group (the bastion's firewall)**
+> **Why** we create it and **what** we do with it is in *1.1 → The bastion*. Here is how the code builds it.
 
 ```hcl
+# ───────────────────────────────────────────────
+# bastion.tf: the admin "jump box"
+#   - lives in a public subnet, you SSH in from your laptop
+#   - has an IAM role (temporary credentials, read-only EKS + ECR)
+#   - installs aws, kubectl, helm on first boot (bastion_bootstrap.sh.tpl)
+# ───────────────────────────────────────────────
+
 resource "aws_security_group" "bastion_sg" {
   name        = "${var.cluster_name}-bastion-sg"
   description = "Security group for the bastion/admin host"
@@ -550,19 +774,7 @@ resource "aws_security_group" "bastion_sg" {
     Name = "${var.cluster_name}-bastion-sg"
   }
 }
-```
 
-| Line | Meaning |
-|---|---|
-| `name = "${var.cluster_name}-bastion-sg"` | Name becomes `abhigna-prod-bastion-sg` |
-| `vpc_id = module.vpc.vpc_id` | The firewall belongs to our VPC |
-| `ingress { from_port 22, to_port 22, protocol tcp }` | **Incoming**: allow SSH (port 22) ... |
-| `cidr_blocks = [var.ssh_allowed_cidr]` | ... only from this IP range. `0.0.0.0/0` = anyone; `<your-ip>/32` = only you |
-| `egress { protocol "-1", 0.0.0.0/0 }` | **Outgoing**: allow everything (`-1` = all protocols), so it can download tools |
-
-**2. IAM role (the bastion's AWS identity)**
-
-```hcl
 resource "aws_iam_role" "bastion" {
   name = "${var.cluster_name}-bastion-server-role-eks"
 
@@ -583,17 +795,7 @@ resource "aws_iam_role" "bastion" {
     Name = "${var.cluster_name}-bastion-server-role-eks"
   }
 }
-```
 
-| Line | Meaning |
-|---|---|
-| `assume_role_policy` | **Trust policy**: *who* may use this role |
-| `Principal = { Service = "ec2.amazonaws.com" }` | Only an EC2 machine may use it |
-| `Action = "sts:AssumeRole"` | EC2 receives **temporary** credentials for this role. No access keys stored on the bastion |
-
-**3. What the role is allowed to do**
-
-```hcl
 resource "aws_iam_role_policy" "bastion_eks_read" {
   name = "${var.cluster_name}-bastion-server-eks-read"
   role = aws_iam_role.bastion.id
@@ -619,29 +821,12 @@ resource "aws_iam_role_policy_attachment" "bastion_ecr_readonly" {
   role       = aws_iam_role.bastion.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
-```
 
-| Resource | Gives permission to |
-|---|---|
-| `aws_iam_role_policy "bastion_eks_read"` | `eks:DescribeCluster`, `ListClusters`, `DescribeNodegroup`, `ListNodegroups`. Read-only, just enough for `aws eks update-kubeconfig` |
-| `aws_iam_role_policy_attachment "bastion_ecr_readonly"` | Read (pull) images from ECR, using the AWS managed policy `AmazonEC2ContainerRegistryReadOnly` |
-
-> Permissions in **AWS** (this role) are separate from permissions **inside Kubernetes** (the ClusterRoleBinding in `eks.tf`). You need both.
-
-**4. Instance profile**
-
-```hcl
 resource "aws_iam_instance_profile" "bastion" {
   name = "${var.cluster_name}-bastion-profile-eks"
   role = aws_iam_role.bastion.name
 }
-```
 
-> An EC2 can't hold an IAM role directly. The **instance profile** is the "holder" that attaches the role to the machine.
-
-**5. The EC2 machine**
-
-```hcl
 resource "aws_instance" "bastion" {
   ami                    = var.bastion_ami_id
   instance_type          = var.bastion_instance_type
@@ -670,46 +855,78 @@ resource "aws_instance" "bastion" {
     Name = "${var.cluster_name}-bastion"
   }
 }
-```
 
-| Line | Meaning |
-|---|---|
-| `ami = var.bastion_ami_id` | Operating system image: Ubuntu 22.04 |
-| `instance_type = var.bastion_instance_type` | Machine size: `m7i-flex.large` |
-| `key_name = var.key_pair_name` | The key pair from Lab Task 1 → you can `ssh` in |
-| `subnet_id = module.vpc.public_subnets[0]` | Place it in the **first public subnet** (`[0]` = first in the list) |
-| `vpc_security_group_ids` | Attach the firewall from part 1 |
-| `iam_instance_profile` | Attach the IAM role from parts 2–4 |
-| `associate_public_ip_address = true` | Give it a public IP so you can reach it from your laptop |
-| `root_block_device { 30 GB, gp3, encrypted }` | Its disk: 30 GB, fast `gp3` type, encrypted |
-| `delete_on_termination = true` | Delete the disk when the machine is deleted (no leftover cost) |
-| `depends_on = [module.eks]` | Create the bastion **after** the cluster, because its first-boot script connects to the cluster |
-| `user_data = templatefile(...)` | Run `bastion_bootstrap.sh.tpl` on first boot, filling in `aws_region` and `cluster_name` |
-
-**6. Outputs**
-
-```hcl
 output "bastion_public_ip" {
-  description = "Public IP of the bastion/admin host — SSH here to run kubectl/eksctl commands"
+  description = "Public IP of the bastion: SSH here to run kubectl and helm"
   value       = aws_instance.bastion.public_ip
 }
 
 output "bastion_ssh_command" {
   description = "Ready-to-use SSH command to connect to the bastion host"
-  value       = "ssh -i ${var.key_pair_name}.pem ubuntu@${aws_instance.bastion.public_ip}"
+  value       = "ssh -i ~/.ssh/${var.key_pair_name}.pem ubuntu@${aws_instance.bastion.public_ip}"
 }
 ```
+
+**Explained, part by part:**
+
+**1. Security group** `aws_security_group.bastion_sg` (the bastion's firewall)
+
+| Line | Meaning |
+|---|---|
+| `name = "${var.cluster_name}-bastion-sg"` | Named `abhigna-prod-bastion-sg` |
+| `ingress { from_port 22, to_port 22, protocol tcp }` | **Incoming**: allow SSH (port 22)... |
+| `cidr_blocks = [var.ssh_allowed_cidr]` | ...only from this IP range |
+| `egress { protocol "-1", 0.0.0.0/0 }` | **Outgoing**: allow everything (`-1` = all protocols), so it can download tools |
+
+**2. IAM role** `aws_iam_role.bastion` (the bastion's AWS identity)
+
+| Line | Meaning |
+|---|---|
+| `assume_role_policy` | **Trust policy**: *who* may use this role |
+| `Principal = { Service = "ec2.amazonaws.com" }` | Only an EC2 machine may use it |
+| `Action = "sts:AssumeRole"` | EC2 receives **temporary** credentials for this role. No access keys are stored on the bastion |
+
+**3. What the role may do**
+
+| Resource | Permission |
+|---|---|
+| `aws_iam_role_policy.bastion_eks_read` | `eks:DescribeCluster`, `ListClusters`, `DescribeNodegroup`, `ListNodegroups`. Read-only: just enough for `aws eks update-kubeconfig` |
+| `aws_iam_role_policy_attachment.bastion_ecr_readonly` | Read (pull) images from ECR |
+
+> Permissions in **AWS** (this role) are separate from permissions **inside Kubernetes** (the ClusterRoleBinding in `eks.tf`). You need both.
+
+**4. Instance profile** `aws_iam_instance_profile.bastion`
+
+> An EC2 can't hold an IAM role directly. The **instance profile** is the holder that attaches the role to the machine.
+
+**5. The EC2 machine** `aws_instance.bastion`
+
+| Line | Meaning |
+|---|---|
+| `ami = var.bastion_ami_id` | Operating system: Ubuntu 22.04 |
+| `instance_type` | Machine size: `m7i-flex.large` |
+| `key_name = var.key_pair_name` | The key pair from Lab Task 1 → you can `ssh` in |
+| `subnet_id = module.vpc.public_subnets[0]` | In the **first public subnet** (`[0]` = first in the list) |
+| `vpc_security_group_ids` | Attach the firewall from part 1 |
+| `iam_instance_profile` | Attach the IAM role from parts 2–4 |
+| `associate_public_ip_address = true` | A public IP, so you can reach it from your laptop |
+| `root_block_device { 30 GB, gp3, encrypted }` | Its disk: 30 GB, fast `gp3`, encrypted |
+| `delete_on_termination = true` | The disk is deleted with the machine (no leftover cost) |
+| `depends_on = [module.eks]` | Create the bastion **after** the cluster, because its first-boot script connects to the cluster |
+| `user_data = templatefile(...)` | Run `bastion_bootstrap.sh.tpl` on first boot, filling in `aws_region` and `cluster_name` |
+
+**6. Outputs**
 
 | Output | Prints |
 |---|---|
 | `bastion_public_ip` | The bastion's public IP |
-| `bastion_ssh_command` | A ready ssh command. It says `-i abhigna-eks-key.pem`, so either run it from `~/.ssh` or use the full path `~/.ssh/abhigna-eks-key.pem` |
+| `bastion_ssh_command` | A ready-to-copy `ssh -i ~/.ssh/abhigna-eks-key.pem ubuntu@<ip>` |
 
 ---
 
 ### `bastion_bootstrap.sh.tpl`: what runs on the bastion's first boot
 
-> The `${aws_region}` and `${cluster_name}` placeholders are filled in by Terraform (`templatefile`) before the script runs. Shown here with kubectl **v1.36.0** (after Lab Task 4).
+> `${aws_region}` and `${cluster_name}` are filled in by Terraform (`templatefile`) before the script runs.
 
 <details>
 <summary>Show the full script</summary>
@@ -717,13 +934,10 @@ output "bastion_ssh_command" {
 ```bash
 #!/bin/bash
 # ───────────────────────────────────────────────
-# Bastion Bootstrap Script
-# Automates everything from the original manual STEP-1 and STEP-2:
-#   - apt update + unzip
-#   - AWS CLI v2 installation
-#   - kubectl installation (v1.35.0 to match your original script)
-#   - eksctl installation
-# Runs automatically on first boot via EC2 user_data — no manual SSH needed.
+# bastion_bootstrap.sh.tpl: runs ONCE on the bastion's first boot (EC2 user_data)
+#   - installs AWS CLI v2, kubectl (same version as the cluster), eksctl, helm
+#   - waits for the cluster, then writes ~/.kube/config so kubectl works
+# Log file: /var/log/bastion-bootstrap.log
 # ───────────────────────────────────────────────
 set -euo pipefail
 
@@ -743,7 +957,7 @@ unzip -o awscliv2.zip
 ./aws/install
 aws --version
 
-# STEP 2b: kubectl installation (matching your specified v1.35.0)
+# STEP 2b: kubectl installation (v1.36.0, same minor version as the cluster)
 curl -LO "https://dl.k8s.io/release/v1.36.0/bin/linux/amd64/kubectl"
 chmod +x kubectl
 mv kubectl /usr/local/bin/kubectl
@@ -813,222 +1027,58 @@ echo "Run: kubectl get nodes"
 
 | Part of the script | What it does |
 |---|---|
-| `set -euo pipefail` | Stop the script at the first error (don't continue half-broken) |
-| `exec > >(tee -a /var/log/bastion-bootstrap.log)` | Save all output to a log file → if something fails, read this log |
+| `set -euo pipefail` | Stop at the first error (don't continue half-broken) |
+| `exec > >(tee -a /var/log/bastion-bootstrap.log)` | Save all output to a log file. If something fails, read this log |
 | `apt-get install unzip curl git jq ...` | Basic tools |
 | AWS CLI v2 install | So the bastion can run `aws` commands |
-| `kubectl` install (v1.36.0) | So it can talk to the cluster |
+| `kubectl` install (v1.36.0) | So it can talk to the cluster. Same version as the cluster |
 | `eksctl` + `helm` install | Extra EKS tool + the Kubernetes package manager |
 | `until aws eks describe-cluster ... ACTIVE` | Wait until the cluster is ready (checks every 15 s, up to 10 min) |
-| `aws eks update-kubeconfig` | Writes `~/.kube/config` → `kubectl` knows which cluster to talk to and how to log in |
+| `aws eks update-kubeconfig` | Writes `~/.kube/config`, so `kubectl` knows which cluster to talk to and how to log in |
 | `/etc/profile.d/...`, `.profile` | Sets `AWS_REGION`, `KUBECONFIG` and the alias `k=kubectl` at every login |
 
 > If `kubectl` doesn't work on the bastion, read the log: `sudo tail -50 /var/log/bastion-bootstrap.log`
 
 ---
 
-### `variables.tf` and `terraform.tfvars`: settings vs values
-
-Every setting in `variables.tf` looks like this (a name, a description, a type and a default):
+### `ecr.tf`: the private image registry
 
 ```hcl
-variable "cluster_version" {
-  description = "Kubernetes version for the EKS control plane"
-  type        = string
-  default     = "1.33"
+# ───────────────────────────────────────────────
+# ecr.tf: private image registry for the app
+# ───────────────────────────────────────────────
+
+resource "aws_ecr_repository" "app" {
+  for_each = toset(var.ecr_repos)
+
+  name                 = each.value
+  image_tag_mutability = "IMMUTABLE" # a tag like v1 can never be overwritten
+  force_delete         = true        # terraform destroy works even with images inside
+
+  image_scanning_configuration {
+    scan_on_push = true # scan every pushed image for vulnerabilities
+  }
 }
 ```
 
-| Part | Meaning |
+**Explained:**
+
+| Line | Meaning |
 |---|---|
-| `variable "cluster_version"` | The setting's name. Code uses it as `var.cluster_version` |
-| `description` | What it is for (just for humans) |
-| `type = string` | What kind of value: `string` (text), `number`, `list(string)` (a list of texts) |
-| `default` | Value used if `terraform.tfvars` doesn't set it |
+| `resource "aws_ecr_repository" "app"` | Create an ECR repository, called `app` inside Terraform |
+| `for_each = toset(var.ecr_repos)` | Repeat once per name in the list: 2 repos from 1 block |
+| `name = each.value` | The repo name: `prod-frontend`, then `prod-backend` |
+| `IMMUTABLE` | Once tag `v1` is pushed, no one can push a different image as `v1`. A tag always means the same image |
+| `force_delete = true` | `terraform destroy` can delete the repo even if images are inside |
+| `scan_on_push = true` | ECR checks every new image for known vulnerabilities (CVEs) |
 
-<details>
-<summary>Show the full variables.tf</summary>
-
-```hcl
-variable "aws_region" {
-  description = "AWS region to deploy all resources"
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "project_name" {
-  description = "Project name used as a prefix for all resources"
-  type        = string
-  default     = "abhigna"
-}
-
-# ───────────────────────────────
-# Bastion / Admin EC2 instance vars
-# ───────────────────────────────
-variable "bastion_ami_id" {
-  description = "Ubuntu 22.04 LTS AMI ID for the bastion/admin host (region-specific, update if changing region)"
-  type        = string
-  default     = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS - us-east-1 (N. Virginia)
-}
-
-variable "bastion_instance_type" {
-  description = "EC2 instance type for the bastion host"
-  type        = string
-  default     = "m7i-flex.large"
-}
-
-variable "bastion_root_volume_size" {
-  description = "Root EBS volume size in GB for the bastion host"
-  type        = number
-  default     = 30
-}
-
-variable "key_pair_name" {
-  description = "Existing EC2 key pair name for SSH access to the bastion host"
-  type        = string
-  default     = "abhigna-eks-key"
-}
-
-variable "ssh_allowed_cidr" {
-  description = "CIDR block allowed to SSH into the bastion host — restrict this to your IP in production"
-  type        = string
-  default     = "0.0.0.0/0"
-}
-
-# ───────────────────────────────
-# VPC vars
-# ───────────────────────────────
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC"
-  type        = string
-  default     = "10.0.0.0/16"
-}
-
-variable "azs" {
-  description = "Availability zones to spread the EKS cluster and subnets across"
-  type        = list(string)
-  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
-}
-
-variable "public_subnet_cidrs" {
-  description = "CIDR blocks for public subnets (one per AZ)"
-  type        = list(string)
-  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
-}
-
-variable "private_subnet_cidrs" {
-  description = "CIDR blocks for private subnets (one per AZ) — EKS worker nodes live here"
-  type        = list(string)
-  default     = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
-}
-
-# ───────────────────────────────
-# EKS Cluster vars
-# ───────────────────────────────
-variable "cluster_name" {
-  description = "Name of the EKS cluster"
-  type        = string
-  default     = "abhigna-cluster"
-}
-
-variable "cluster_version" {
-  description = "Kubernetes version for the EKS control plane"
-  type        = string
-  default     = "1.33"
-}
-
-# ───────────────────────────────
-# EKS Managed Nodegroup vars
-# ───────────────────────────────
-variable "nodegroup_name" {
-  description = "Name of the EKS managed nodegroup"
-  type        = string
-  default     = "abhigna-cluster-ng-1"
-}
-
-variable "node_instance_types" {
-  description = "EC2 instance types for EKS worker nodes (t3.micro is too small for production EKS — using t3.medium)"
-  type        = list(string)
-  default     = ["m7i-flex.large"]
-}
-
-variable "node_volume_size" {
-  description = "EBS root volume size in GB for each EKS worker node"
-  type        = number
-  default     = 20
-}
-
-variable "node_desired_size" {
-  description = "Desired number of worker nodes"
-  type        = number
-  default     = 2
-}
-
-variable "node_min_size" {
-  description = "Minimum number of worker nodes for autoscaling"
-  type        = number
-  default     = 2
-}
-
-variable "node_max_size" {
-  description = "Maximum number of worker nodes for autoscaling"
-  type        = number
-  default     = 6
-}
-```
-
-</details>
-
-And `terraform.tfvars` gives the real values (shown **after** the 3 changes in Lab Task 3):
-
-```hcl
-# ───────────────────────────────────────────────
-# terraform.tfvars
-# Edit these values before running `terraform apply`.
-# My values for the Day 23 EKS lab.
-# ───────────────────────────────────────────────
-
-aws_region   = "us-east-1"
-project_name = "abhigna-prod"
-
-# Bastion / Admin host — Ubuntu, m7i-flex.large, 30 GB EBS (as requested)
-bastion_ami_id           = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS - us-east-1 (N. Virginia)
-bastion_instance_type    = "m7i-flex.large"
-bastion_root_volume_size = 30
-key_pair_name            = "abhigna-eks-key" # must already exist in your AWS account
-ssh_allowed_cidr         = "0.0.0.0/0"       # restrict to your IP in production, e.g. "203.0.113.10/32"
-
-# Networking
-vpc_cidr             = "10.0.0.0/16"
-azs                  = ["us-east-1a", "us-east-1b", "us-east-1c"]
-public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
-private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
-
-# EKS Cluster
-cluster_name    = "abhigna-prod"
-cluster_version = "1.36"
-
-# EKS Managed Nodegroup
-nodegroup_name      = "abhigna-cluster-ng-1"
-node_instance_types = ["m7i-flex.large"] # t3.micro is too small for EKS worker nodes
-node_volume_size    = 20
-node_desired_size   = 2
-node_min_size       = 2
-node_max_size       = 6
-```
-
-```
-variables.tf          →  "there is a setting called cluster_name, default abhigna-cluster"
-terraform.tfvars      →  "for this project, cluster_name = abhigna-prod"   ← wins
-```
-
-> Change values in `terraform.tfvars`; leave `variables.tf` alone unless you add a brand-new setting.
+---
 
 ### `outputs.tf`: what you see after `apply`
 
 ```hcl
 # ───────────────────────────────────────────────
-# Outputs — everything you need after `terraform apply`
+# outputs.tf: values printed after `terraform apply`
 # ───────────────────────────────────────────────
 
 output "cluster_name" {
@@ -1066,9 +1116,14 @@ output "configure_kubectl" {
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
 }
 
-output "nodegroup_name" {
-  description = "EKS managed nodegroup name"
-  value       = var.nodegroup_name
+output "node_groups" {
+  description = "Managed node groups"
+  value       = keys(module.eks.eks_managed_node_groups)
+}
+
+output "ecr_repository_urls" {
+  description = "Push your images here"
+  value       = { for name, repo in aws_ecr_repository.app : name => repo.repository_url }
 }
 ```
 
@@ -1077,97 +1132,11 @@ output "nodegroup_name" {
 | Output | Use |
 |---|---|
 | `cluster_name`, `cluster_endpoint`, `cluster_version` | Basic cluster info |
-| `vpc_id`, `cluster_security_group_id` | Needed later (for example, the load balancer controller in a later step) |
+| `cluster_security_group_id`, `vpc_id` | Needed later (for example, by the load balancer controller) |
 | `oidc_provider_arn` | Needed for IRSA |
 | `configure_kubectl` | The `aws eks update-kubeconfig` command, ready to copy |
-| `nodegroup_name` | **You fix this in Lab Task 6** |
-
----
-
-## 1.3 The new code you will add
-
-In the lab you **replace** the old node group in `eks.tf` with this block:
-
-```hcl
-  cluster_addons = {
-    eks-pod-identity-agent = { most_recent = true, before_compute = true }
-    aws-ebs-csi-driver     = { most_recent = true }
-  }
-
-  eks_managed_node_group_defaults = {
-    ami_type       = "AL2023_x86_64_STANDARD"
-    instance_types = ["m7i-flex.large"]
-    metadata_options = {
-      http_endpoint               = "enabled"
-      http_tokens                 = "required"
-      http_put_response_hop_limit = 1
-    }
-    iam_role_additional_policies = {
-      AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-      AmazonEBSCSIDriverPolicy     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-    }
-  }
-
-  eks_managed_node_groups = {
-    system = {
-      min_size     = 2
-      max_size     = 4
-      desired_size = 2
-      labels       = { role = "system" }
-    }
-    app = {
-      min_size     = 2
-      max_size     = 4
-      desired_size = 2
-      labels       = { role = "app" }
-      taints = {
-        app = { key = "workload", value = "app", effect = "NO_SCHEDULE" }
-      }
-    }
-  }
-```
-
-**What each line means:**
-
-| Line | Meaning |
-|---|---|
-| `cluster_addons` | Add-ons that EKS installs and keeps updated for you |
-| `eks-pod-identity-agent` | Runs on every node and hands out **temporary** AWS credentials to Pods |
-| `before_compute = true` | Install it **before** the nodes start, so every node has it from minute one |
-| `aws-ebs-csi-driver` | Creates an EBS disk when a Pod asks for storage. MySQL needs this to save data |
-| `eks_managed_node_group_defaults` | Settings shared by **both** node groups, written once |
-| `ami_type = "AL2023_x86_64_STANDARD"` | The operating system of the nodes: Amazon Linux 2023 |
-| `instance_types = ["m7i-flex.large"]` | Machine size: 2 vCPU, 8 GB RAM per node |
-| `http_tokens = "required"` | Use IMDSv2 only (requires a session token, safer than v1) |
-| `http_put_response_hop_limit = 1` | The metadata answer can't reach Pods (see *What is IMDS*) |
-| `AmazonSSMManagedInstanceCore` | Lets you log in to a node through AWS SSM, without SSH keys |
-| `AmazonEBSCSIDriverPolicy` | Permission to create EBS disks. *On the node for now; Step 05 moves it to Pod Identity* |
-| `system = { ... }` | The system node group: starts with 2 nodes, can grow to 4 |
-| `min_size / max_size / desired_size` | Never fewer than 2, never more than 4, start with 2 |
-| `labels = { role = "system" }` | Puts the label `role=system` on these nodes |
-| `app = { ... }` | The app node group, also 2 → 4 nodes |
-| `taints = { ... NO_SCHEDULE }` | Puts `workload=app:NoSchedule` on app nodes: no Pod lands here without a toleration |
-
-And you **create** a new file `ecr.tf`:
-
-```hcl
-resource "aws_ecr_repository" "app" {
-  for_each             = toset(["prod-frontend", "prod-backend"])
-  name                 = each.value
-  image_tag_mutability = "IMMUTABLE"
-  force_delete         = true
-  image_scanning_configuration { scan_on_push = true }
-}
-```
-
-| Line | Meaning |
-|---|---|
-| `resource "aws_ecr_repository" "app"` | "Create an ECR repository", called `app` inside Terraform |
-| `for_each = toset([...])` | Repeat this block once per name: 2 repos from 1 block |
-| `name = each.value` | The repo name: `prod-frontend`, then `prod-backend` |
-| `IMMUTABLE` | Once tag `v1` is pushed, no one can push a different image as `v1`. A tag always means the same image |
-| `force_delete = true` | `terraform destroy` can delete the repo even if images are still inside |
-| `scan_on_push = true` | ECR checks every new image for known vulnerabilities (CVEs) |
+| `node_groups` | `["app", "system"]` |
+| `ecr_repository_urls` | Where to push your images in Step 02 |
 
 ---
 
@@ -1181,24 +1150,21 @@ Now you build it. Do the tasks **in order**, one at a time. Don't skip the ✅ C
 |---|---|
 | 📍 **Where** | Which window to use |
 | 💻 **Terminal** | The black window where you type commands, **on your laptop** |
-| 📝 **VS Code** | The editor, only for changing files |
-| 🖥️ **Bastion** | The EC2 you log in to with `ssh` (only in Task 10) |
-| ▶️ **Do** | The commands to run, one box at a time: copy, paste, press Enter |
+| 📝 **VS Code** | The editor, for reading and changing files |
+| 🖥️ **Bastion** | The EC2 you log in to with `ssh` (Task 7) |
+| ▶️ **Do** | What to type or click. Commands: one box at a time, copy, paste, Enter |
 | ✅ **Check** | How to know the task worked |
 
 ```
-Task 0   Tools ready?                  💻   free
-Task 1   Create the key pair           💻   free
-Task 2   Get the code                  💻   free
-Task 3   Name + version                📝   free
-Task 4   kubectl version               📝   free
-Task 5   Two node groups (eks.tf)      📝   free
-Task 6   Fix outputs.tf                📝   free
-Task 7   Create ecr.tf                 📝   free
-Task 8   Check the code                💻   free
-Task 9   Create everything in AWS      💻   💰 cost starts
-Task 10  Test the cluster              🖥️   bastion
-Task 11  Delete everything             💻   when you stop
+Task 0  Tools ready?                    💻      free
+Task 1  Create the key pair             💻      free
+Task 2  Get the code                    💻      free
+Task 3  Open and read the code          📝      free
+Task 4  Set your values                 📝      free
+Task 5  Check the code                  💻      free
+Task 6  Create everything in AWS        💻      💰 cost starts
+Task 7  Test the cluster                🖥️      bastion
+Task 8  Delete everything               💻      when you stop
 ```
 
 ---
@@ -1223,7 +1189,7 @@ terraform -version
 git --version
 ```
 
-> Missing one? Install guides: [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) · [Terraform](https://developer.hashicorp.com/terraform/install) · [Git](https://git-scm.com/downloads)
+> Missing one? Install guides: [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) · [Terraform](https://developer.hashicorp.com/terraform/install) · [Git](https://git-scm.com/downloads) · [VS Code](https://code.visualstudio.com/)
 
 Connect the AWS CLI to your account (only the first time). It asks for your Access Key ID, Secret Access Key, region (`us-east-1`) and output format (`json`):
 
@@ -1258,7 +1224,7 @@ chmod 400 ~/.ssh/abhigna-eks-key.pem
 ```
 
 > `chmod 400` = only you can read the file. `ssh` refuses a key that others can read.
-> Using another key name? Then also change `key_pair_name` in `terraform.tfvars` to the same name.
+> Want another name? Use it here **and** in `key_pair_name` in Task 4.
 
 ✅ **Check:**
 
@@ -1276,11 +1242,11 @@ aws ec2 describe-key-pairs --region us-east-1 --key-names abhigna-eks-key --quer
 
 📍 **Where:** 💻 Terminal
 
-**Why:** download the repo and copy the basic EKS code into a new folder. The original stays untouched.
+**Why:** download the repository that has the Terraform code.
 
 ▶️ **Do:**
 
-> Already have the repo? Skip `cd ~` and `git clone`, and start from `cd ~/k8s-eks-projects`.
+> Already have the repo? Skip `cd ~` and `git clone`, and run `git pull` inside `~/k8s-eks-projects` instead to get the latest code.
 
 ```bash
 cd ~
@@ -1290,17 +1256,9 @@ cd ~
 git clone https://github.com/Abhignadumpala/k8s-eks-projects.git
 ```
 
-```bash
-cd ~/k8s-eks-projects
-```
+> Run `git clone` from your home folder (`~`), never inside another project, or you get a copy inside a copy.
 
-```bash
-mkdir -p 05-production-eks
-```
-
-```bash
-cp -r 01-eks-terraform 05-production-eks/terraform
-```
+Go to the Terraform folder. **Every 💻 command from now on runs here.**
 
 ```bash
 cd ~/k8s-eks-projects/05-production-eks/terraform
@@ -1312,54 +1270,66 @@ cd ~/k8s-eks-projects/05-production-eks/terraform
 ls
 ```
 
-> You see `bastion.tf  eks.tf  outputs.tf  providers.tf  terraform.tfvars  variables.tf  vpc.tf ...` and **no** `k8s-eks-projects` folder inside.
+> Shows: `bastion.tf  bastion_bootstrap.sh.tpl  ecr.tf  eks.tf  outputs.tf  providers.tf  terraform.tfvars  variables.tf  vpc.tf`
 
-Open the whole repo in VS Code (you need it in Tasks 5–7):
+> 💡 Your terminal prompt should end with `05-production-eks/terraform$`. If you open a new terminal, run the `cd` above again first.
+
+---
+
+## Task 3 — Open and read the code
+
+📍 **Where:** 📝 VS Code
+
+**Why:** never run code you don't understand. Reading it now makes the `plan` output in Task 6 make sense.
+
+▶️ **Do:**
 
 ```bash
 code ~/k8s-eks-projects
 ```
 
-> 💡 From now on, every 💻 command runs inside `~/k8s-eks-projects/05-production-eks/terraform`. If you open a new terminal, run that `cd` again first.
+1. In the Explorer on the left, open `05-production-eks` → `terraform`.
+2. Open each file and read it next to its explanation in *Part 1 → 1.2 The code, file by file*. Start with `eks.tf`, the most important one.
+3. Tip: open this guide in VS Code too, with `Ctrl+Shift+V` on `step-01-infrastructure/README.md`, to read it formatted.
+
+✅ **Check:** you can answer these:
+- Which file do you edit to change the cluster name? (`terraform.tfvars`)
+- Which node group has the taint? (`app`)
+- Where do worker nodes live, public or private subnets? (private)
 
 ---
 
-## Task 3 — Set the new name and version
+## Task 4 — Set your values
 
 📍 **Where:** 📝 VS Code
 
-**Why:** give the new cluster its own name, and use Kubernetes **1.36** (1.33 is in extended support and costs 6× more). See *1.1 → We are building a production cluster now*.
+**Why:** `terraform.tfvars` holds the values for **your** account. Two of them may need to change.
 
 ▶️ **Do:**
 
-1. In VS Code, open **`05-production-eks/terraform/terraform.tfvars`** (not the one in `01-eks-terraform`).
-2. Change these 3 lines:
+1. Open **`05-production-eks/terraform/terraform.tfvars`**.
+2. Check these 2 lines:
 
-| Line | Before | After |
-|---|---|---|
-| 8 | `project_name = "abhigna"` | `project_name = "abhigna-prod"` |
-| 24 | `cluster_name    = "abhigna-cluster"` | `cluster_name    = "abhigna-prod"` |
-| 25 | `cluster_version = "1.33"` | `cluster_version = "1.36"` |
+| Line | What to put |
+|---|---|
+| `key_pair_name = "abhigna-eks-key"` | The key pair name from Task 1. Leave it if you used the same name |
+| `ssh_allowed_cidr = "0.0.0.0/0"` | Recommended: your own IP, like `"203.0.113.10/32"`, so only you can SSH to the bastion |
+
+Find your IP (💻 terminal):
+
+```bash
+curl -s ifconfig.me
+```
 
 3. Save with `Ctrl+S`. The ● on the tab disappears when the file is saved.
 
-> Leave all other lines as they are. The `nodegroup_name` and `node_*` lines are no longer used (Task 5 replaces the node group), and Terraform doesn't mind unused values.
+> Everything else (names, version 1.36, sizes) is ready to use. Only change it if you know why.
 
 <details>
-<summary>Alternative: do it from the terminal with <code>sed</code></summary>
-
-`sed -i 's/old/new/' file` finds `old` and replaces it with `new` inside the file. Run these in 💻 the terminal, in `05-production-eks/terraform`:
+<summary>Alternative: set your IP from the terminal with <code>sed</code></summary>
 
 ```bash
-sed -i 's/^project_name = "abhigna"/project_name = "abhigna-prod"/' terraform.tfvars
-```
-
-```bash
-sed -i 's/^cluster_name    = "abhigna-cluster"/cluster_name    = "abhigna-prod"/' terraform.tfvars
-```
-
-```bash
-sed -i 's/^cluster_version = "1.33"/cluster_version = "1.36"/' terraform.tfvars
+sed -i "s#^ssh_allowed_cidr .*#ssh_allowed_cidr         = \"$(curl -s ifconfig.me)/32\"#" terraform.tfvars
 ```
 
 </details>
@@ -1367,196 +1337,16 @@ sed -i 's/^cluster_version = "1.33"/cluster_version = "1.36"/' terraform.tfvars
 ✅ **Check:**
 
 ```bash
-grep -n "project_name\|cluster_name \|cluster_version" terraform.tfvars
+grep -n "key_pair_name\|ssh_allowed_cidr\|cluster_name\|cluster_version" terraform.tfvars
 ```
 
-> Shows `abhigna-prod`, `abhigna-prod` and `1.36`.
+> Shows your key name, your IP (or `0.0.0.0/0`), `abhigna-prod` and `1.36`.
 
-Want to see which versions are cheap right now? Pick one that says `STANDARD_SUPPORT`:
-
-```bash
-aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text
-```
+> ⚠️ Using your own IP? If your home IP changes (router restart), SSH stops working. Fix: put the new IP and run `terraform apply` again.
 
 ---
 
-## Task 4 — Match the kubectl version
-
-📍 **Where:** 📝 VS Code
-
-**Why:** the bastion installs `kubectl` on its first boot. It should match the cluster version (1.36).
-
-▶️ **Do:**
-
-1. Open **`05-production-eks/terraform/bastion_bootstrap.sh.tpl`**.
-2. Find **line 30**:
-
-```bash
-curl -LO "https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl"
-```
-
-3. Change `v1.35.0` to `v1.36.0`:
-
-```bash
-curl -LO "https://dl.k8s.io/release/v1.36.0/bin/linux/amd64/kubectl"
-```
-
-4. Save with `Ctrl+S`.
-
-> Lines 7 and 29 still say "v1.35.0" inside comments (lines starting with `#`). Comments are only notes and don't run; you can update them too if you like.
-
-<details>
-<summary>Alternative: do it from the terminal with <code>sed</code></summary>
-
-```bash
-sed -i 's#v1.35.0/bin#v1.36.0/bin#' bastion_bootstrap.sh.tpl
-```
-
-</details>
-
-✅ **Check:**
-
-```bash
-grep -n "dl.k8s.io" bastion_bootstrap.sh.tpl
-```
-
-> The line contains `v1.36.0`.
-
----
-
-## Task 5 — Two node groups + add-ons (`eks.tf`)
-
-📍 **Where:** 📝 VS Code
-
-**Why:** this is the main production change: a **system** and an **app** node group, the Pod Identity add-on, IMDS hop limit 1 and least-privilege permissions. Every line is explained in *1.3 The new code you will add*.
-
-▶️ **Do:**
-
-1. In VS Code, open **`05-production-eks/terraform/eks.tf`** (not the one in `01-eks-terraform`).
-2. Find **line 33**. It starts with `# EBS CSI driver: lets PVCs create EBS volumes`.
-3. Find **line 86**. It is a closing brace on its own line, just **above** `# Allow the bastion host to reach the cluster API`.
-4. Select lines 33 to 86: click at the start of line 33, then hold `Shift` and click at the end of line 86.
-5. Press `Delete`.
-6. Paste this block in the same place:
-
-```hcl
-  cluster_addons = {
-    eks-pod-identity-agent = { most_recent = true, before_compute = true }
-    aws-ebs-csi-driver     = { most_recent = true }
-  }
-
-  eks_managed_node_group_defaults = {
-    ami_type       = "AL2023_x86_64_STANDARD"
-    instance_types = ["m7i-flex.large"]
-    metadata_options = {
-      http_endpoint               = "enabled"
-      http_tokens                 = "required"
-      http_put_response_hop_limit = 1
-    }
-    iam_role_additional_policies = {
-      AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-      AmazonEBSCSIDriverPolicy     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-    }
-  }
-
-  eks_managed_node_groups = {
-    system = {
-      min_size     = 2
-      max_size     = 4
-      desired_size = 2
-      labels       = { role = "system" }
-    }
-    app = {
-      min_size     = 2
-      max_size     = 4
-      desired_size = 2
-      labels       = { role = "app" }
-      taints = {
-        app = { key = "workload", value = "app", effect = "NO_SCHEDULE" }
-      }
-    }
-  }
-```
-
-7. Save with `Ctrl+S`. The ● on the tab disappears when the file is saved.
-
-✅ **Check:**
-
-```bash
-grep -n "system = {\|app = {\|eks-pod-identity-agent\|hop_limit\|remote_access" eks.tf
-```
-
-> Shows `eks-pod-identity-agent`, `hop_limit`, `system = {` and `app = {`. It must **not** show `remote_access` (that belonged to the old node group).
-
----
-
-## Task 6 — Fix `outputs.tf`
-
-📍 **Where:** 📝 VS Code
-
-**Why:** one output still points to the old node group you just deleted, so Terraform would fail.
-
-▶️ **Do:**
-
-1. Open **`05-production-eks/terraform/outputs.tf`**.
-2. Find this line (around line 42):
-
-```hcl
-  value       = var.nodegroup_name
-```
-
-3. Replace it with:
-
-```hcl
-  value       = keys(module.eks.eks_managed_node_groups)
-```
-
-4. Save with `Ctrl+S`.
-
-✅ **Check:**
-
-```bash
-grep -n "var.nodegroup_name" outputs.tf
-```
-
-> Prints **nothing**. That means the old line is gone.
-
----
-
-## Task 7 — Create `ecr.tf`
-
-📍 **Where:** 📝 VS Code
-
-**Why:** your private image registry. Later steps push images here and block images from anywhere else.
-
-▶️ **Do:**
-
-1. In the Explorer, right-click the folder **`05-production-eks/terraform`** → **New File** → name it `ecr.tf`.
-2. Paste:
-
-```hcl
-resource "aws_ecr_repository" "app" {
-  for_each             = toset(["prod-frontend", "prod-backend"])
-  name                 = each.value
-  image_tag_mutability = "IMMUTABLE"
-  force_delete         = true
-  image_scanning_configuration { scan_on_push = true }
-}
-```
-
-3. Save with `Ctrl+S`.
-
-✅ **Check:**
-
-```bash
-cat ecr.tf
-```
-
-> Shows the code you pasted.
-
----
-
-## Task 8 — Check the code (free)
+## Task 5 — Check the code (free)
 
 📍 **Where:** 💻 Terminal, in `05-production-eks/terraform`
 
@@ -1568,13 +1358,12 @@ cat ecr.tf
 terraform init
 ```
 
-> Downloads the AWS plugin and the VPC/EKS modules. If you see `connection reset by peer`, just run it again.
+> Downloads the AWS plugin and the VPC/EKS modules into a hidden `.terraform/` folder. Takes 1–2 minutes the first time.
+> `connection reset by peer`? Run it again. Still failing? See *Common problems*.
 
 ```bash
 terraform fmt
 ```
-
-> Tidies the spacing in all `.tf` files.
 
 ```bash
 terraform validate
@@ -1582,11 +1371,9 @@ terraform validate
 
 ✅ **Check:** `validate` prints **Success! The configuration is valid.**
 
-> Got an error? It names the file and line. Fix it, or look in *Common problems* at the bottom.
-
 ---
 
-## Task 9 — Create everything in AWS (💰 cost starts here)
+## Task 6 — Create everything in AWS (💰 cost starts here)
 
 📍 **Where:** 💻 Terminal, in `05-production-eks/terraform`
 
@@ -1598,36 +1385,37 @@ terraform validate
 terraform plan
 ```
 
-> A preview only. Check you see the VPC, the EKS cluster, node groups `system` and `app`, the 2 add-ons, 2 ECR repos and the bastion. The last line says `Plan: N to add, 0 to change, 0 to destroy`.
+> A **preview only**. Scroll through it: you should see the VPC and subnets, `aws_eks_cluster`, node groups `["system"]` and `["app"]`, the add-ons `eks-pod-identity-agent` and `aws-ebs-csi-driver`, 2 `aws_ecr_repository` and `aws_instance.bastion`. The last line: **`Plan: 82 to add, 0 to change, 0 to destroy.`**
 
 ```bash
 terraform apply
 ```
 
-> Type `yes`. It takes about **20 minutes**. Don't close the terminal.
+> Shows the plan again and asks for confirmation: type `yes`. It takes about **20 minutes** (the EKS control plane is the slow part). Don't close the terminal.
 
-✅ **Check:** the last lines say `Apply complete!` and print the outputs (`bastion_public_ip`, `cluster_name = "abhigna-prod"`, `node_groups`...).
+✅ **Check:** the end says **`Apply complete! Resources: 82 added`** and prints the outputs: `bastion_public_ip`, `bastion_ssh_command`, `cluster_name = "abhigna-prod"`, `node_groups = ["app", "system"]`, `ecr_repository_urls`...
 
 ---
 
-## Task 10 — Test the cluster
+## Task 7 — Test the cluster
 
 📍 **Where:** 💻 Terminal first, then 🖥️ the bastion
 
 **Why:** prove that the cluster, both node groups, the taint, the add-ons and ECR all work.
 
-▶️ **Do (💻 laptop):** get the bastion's IP.
+▶️ **Do (💻 laptop):** print the ready-made ssh command:
 
 ```bash
-terraform output bastion_public_ip
+terraform output -raw bastion_ssh_command
 ```
 
-Log in. The user is `ubuntu`; use the IP you just got:
+Copy what it prints and run it. It looks like this (user `ubuntu`):
 
 ```bash
 ssh -i ~/.ssh/abhigna-eks-key.pem ubuntu@<bastion-public-ip>
 ```
 
+> First time it asks `Are you sure you want to continue connecting?`: type `yes`.
 > `kubectl: command not found`? The setup script is still running. Wait 2–3 minutes, type `exit`, and log in again.
 
 ▶️ **Do (🖥️ bastion):**
@@ -1654,17 +1442,23 @@ kubectl get pods -n kube-system
 aws ecr describe-repositories --region us-east-1 --query 'repositories[].repositoryName' --output text
 ```
 
-> ✅ Prints `prod-frontend    prod-backend`.
+> ✅ Prints `prod-backend    prod-frontend`.
+
+```bash
+exit
+```
+
+> Back on your laptop.
 
 🎉 All 4 checks pass? **Step 01 is done.**
 
 ---
 
-## Task 11 — Delete everything when you stop
+## Task 8 — Delete everything when you stop
 
-📍 **Where:** 💻 Terminal on the laptop, in `05-production-eks/terraform`. **Not** on the bastion: type `exit` to leave it first.
+📍 **Where:** 💻 Terminal **on the laptop**, in `05-production-eks/terraform` (not on the bastion)
 
-**Why:** the cluster costs about $0.63 every hour, even when you're not using it.
+**Why:** the cluster costs about $0.63 every hour, even when you aren't using it.
 
 ▶️ **Do:**
 
@@ -1672,7 +1466,8 @@ aws ecr describe-repositories --region us-east-1 --query 'repositories[].reposit
 terraform destroy
 ```
 
-> Type `yes`. It takes about 15 minutes. Next time, `terraform apply` builds it again exactly the same way.
+> Type `yes`. It takes about 15 minutes. The end says `Destroy complete!`.
+> Next time, `terraform apply` builds it all again exactly the same way.
 
 ---
 
@@ -1680,13 +1475,14 @@ terraform destroy
 
 | Error | Why it happens | Fix |
 |---|---|---|
-| `connection reset by peer` during `terraform init` | Network dropped the download | Run `terraform init` again |
-| `InvalidKeyPair.NotFound` | The key pair name in `terraform.tfvars` doesn't exist in us-east-1 | Do Task 1, or fix `key_pair_name` |
-| `Reference to undeclared ... nodegroup_name` | `outputs.tf` still points to the old node group | Do Task 6 |
-| `Unsupported Kubernetes version` | The version isn't offered any more | Pick a `STANDARD_SUPPORT` version (see Task 3) |
-| `VcpuLimitExceeded` | Your AWS account's vCPU quota is too low for 5 machines | Request a quota increase in Service Quotas, or set fewer nodes |
+| `connection reset by peer` during `terraform init` | The download was cut off. Often an IPv6 network problem | Run `terraform init` again. If it keeps failing, try another network (e.g. phone hotspot) |
+| `InvalidKeyPair.NotFound` | `key_pair_name` doesn't exist in us-east-1 | Do Task 1, or fix `key_pair_name` in `terraform.tfvars` |
+| `Unsupported Kubernetes version` | That version isn't offered any more | Pick a `STANDARD_SUPPORT` version: `aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text` |
+| `VcpuLimitExceeded` | Your account's vCPU quota is too low for 5 machines | Request a quota increase in *Service Quotas*, or lower `desired`/`min` in `terraform.tfvars` |
 | `ssh: Permission denied (publickey)` | Wrong key file or wrong user | Use `-i ~/.ssh/abhigna-eks-key.pem` and user `ubuntu` |
-| `ssh: Connection timed out` | Your IP isn't allowed in `ssh_allowed_cidr` | Put your current IP from `curl -s ifconfig.me` and `apply` again |
+| `ssh: Connection timed out` | Your IP isn't allowed in `ssh_allowed_cidr` | Put your current IP from `curl -s ifconfig.me`, then `terraform apply` again |
+| `kubectl: command not found` on the bastion | Setup script still running | Wait 2–3 minutes and log in again. Log: `sudo tail -50 /var/log/bastion-bootstrap.log` |
+| `No configuration files` | You're in the wrong folder | `cd ~/k8s-eks-projects/05-production-eks/terraform` |
 
 ## Cost
 
@@ -1738,3 +1534,4 @@ It's a single admin entry point inside the VPC with the right tool versions. It 
 ---
 
 [⬅ Back to the project overview](../README.md) · Next: Step 02 — Secure images (coming soon)
+
