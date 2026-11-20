@@ -182,6 +182,37 @@ You need **both**: a toleration only lets the Pod in, it does not send it there.
 
 You will **see this live** in Task 7: `kubectl get nodes -L role` shows 2 `system` + 2 `app` nodes, and `kubectl describe nodes -l role=app | grep Taints` shows the taint.
 
+#### Different groups, one cluster: how `kubectl` sees all Pods
+
+`kubectl` does **not** talk to the nodes. It talks to the **API server**, the brain of the cluster. Every node's **kubelet** reports its Pods to the API server, so the API server knows **every Pod on every node**.
+
+```
+            kubectl get pods
+                   │
+                   ▼
+          API server (EKS control plane) ← knows EVERY Pod on EVERY node
+          ▲        ▲        ▲        ▲
+          │        │        │        │   (each kubelet reports its Pods)
+     system-1  system-2   app-1    app-2
+     └─ system group ─┘   └─ app group ─┘
+```
+
+**Node groups are an AWS idea:** how AWS creates and scales a set of EC2 machines with the same settings. Once they join, Kubernetes sees **4 nodes in one cluster** and only cares about their **labels** (`role=system` / `role=app`).
+
+**Analogy 🏢:** one company, 2 departments. HR (API server) has the list of *all* employees.
+
+| Command | Shows |
+|---|---|
+| `kubectl get pods` | Pods in the **default** namespace only |
+| `kubectl get pods -A` | Pods in **all** namespaces |
+| `kubectl get pods -A -o wide` | Adds a **NODE** column: which node each Pod runs on |
+| `kubectl get nodes -L role` | All nodes with a `ROLE` column |
+| `kubectl get pods -A --field-selector spec.nodeName=<node-name>` | Only the Pods on one node |
+
+> ⚠️ `kubectl get po` with no flags shows only the **default** namespace. CoreDNS lives in `kube-system`: add `-n kube-system` or `-A`.
+
+> 🎯 **Interview one-liner:** "Node groups are an AWS concept for managing EC2 machines; Kubernetes sees one cluster of nodes. kubectl queries the API server, which knows every Pod on every node."
+
 ### Is everything in EKS a Pod?
 
 Mostly yes, with 3 important exceptions.
