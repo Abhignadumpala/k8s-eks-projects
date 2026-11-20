@@ -182,6 +182,40 @@ You need **both**: a toleration only lets the Pod in, it does not send it there.
 
 You will **see this live** in Task 7: `kubectl get nodes -L role` shows 2 `system` + 2 `app` nodes, and `kubectl describe nodes -l role=app | grep Taints` shows the taint.
 
+### Is everything in EKS a Pod?
+
+Mostly yes, with 3 important exceptions.
+
+| Component | Pod? | Where it runs | Kind |
+|---|---|---|---|
+| **CoreDNS** | ✅ | System nodes | Deployment (2 replicas) |
+| **Argo CD, Prometheus, Grafana, Karpenter** | ✅ | System nodes | Deployments / StatefulSets |
+| **EBS CSI controller** | ✅ | System nodes | Deployment |
+| **kube-proxy** (Service networking) | ✅ | **Every node**, app nodes too | DaemonSet |
+| **aws-node** (VPC CNI, gives Pods IPs) | ✅ | **Every node** | DaemonSet |
+| **eks-pod-identity-agent** | ✅ | **Every node** | DaemonSet |
+| **ebs-csi-node** (attaches disks) | ✅ | **Every node** | DaemonSet |
+| **Your frontend / backend** | ✅ | App nodes | Deployment |
+| **API server, etcd, scheduler, controller-manager** | ❌ | **AWS's account** (managed control plane) | You never see them |
+| **kubelet, containerd** | ❌ | Every node, as Linux services (systemd) | They *start* the Pods |
+| **ECR** | ❌ | An AWS service, outside the cluster | Stores the images Pods pull |
+
+**3 things to remember:**
+
+1. **The control plane is not on your nodes.** AWS runs the API server and etcd for you, in their account, across 3 AZs. That is what the $0.10/hr pays for. Your nodes only run workloads.
+2. **kubelet is not a Pod.** It is the agent that *creates* Pods, so it must exist before any Pod. It runs as a normal Linux service.
+3. **DaemonSets run on app nodes too, even with the taint.** kube-proxy, aws-node and the other node agents carry a "tolerate everything" toleration, because *every* node needs networking and disks. So on an app node you see your app Pods **plus** these DaemonSet Pods. That is expected.
+
+See it in Task 7:
+
+```bash
+kubectl get pods -n kube-system -o wide
+```
+
+> ✅ The `NODE` column shows CoreDNS only on system nodes, but `aws-node` and `kube-proxy` on all 4 nodes.
+
+> 🎯 **Interview one-liner:** "In EKS, add-ons like CoreDNS run as Deployments on system nodes, node agents like kube-proxy and the VPC CNI run as DaemonSets on every node, and the control plane is managed by AWS outside my nodes. kubelet runs as a systemd service, not a Pod."
+
 ### What is IMDS and why hop limit 1?
 
 **IMDS (Instance Metadata Service)** = a special address (`169.254.169.254`) every EC2 machine can call to get information about itself, **including temporary AWS credentials of the node's IAM role**.
