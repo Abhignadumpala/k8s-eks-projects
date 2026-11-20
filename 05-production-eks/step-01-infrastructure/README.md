@@ -216,6 +216,69 @@ kubectl get pods -n kube-system -o wide
 
 > 🎯 **Interview one-liner:** "In EKS, add-ons like CoreDNS run as Deployments on system nodes, node agents like kube-proxy and the VPC CNI run as DaemonSets on every node, and the control plane is managed by AWS outside my nodes. kubelet runs as a systemd service, not a Pod."
 
+### kubelet and containerd: processes, not Pods
+
+They run directly on each node's Linux, managed by **systemd**, like `nginx` or `sshd` on a normal server.
+
+| Process | Job | Analogy 🏗️ |
+|---|---|---|
+| **kubelet** | The Kubernetes **agent** on each node. Asks the API server "which Pods should run on me?", tells containerd to start them, runs probes, reports node health | The **site manager**: gets the plan, gives orders, reports progress |
+| **containerd** | The **container runtime**. Pulls images (from ECR) and starts and stops containers | The **worker**: does the actual building |
+
+How they work together when a Pod is created:
+
+```
+API server ──"run backend Pod on node-3"──► kubelet (node-3)
+                                              │
+                                              ▼
+                                       containerd ── pull image from ECR ──► start container
+                                              │
+kubelet ◄──── "container running" ────────────┘
+   │
+   └──► reports to API server: Pod is Running ✅
+```
+
+**Why can't they be Pods?** Pods need kubelet and containerd to exist first (chicken and egg), so they start before Kubernetes, as normal OS services.
+
+See them on a node (via SSM):
+
+```bash
+systemctl status kubelet
+```
+
+```bash
+systemctl status containerd
+```
+
+> 🎯 **Interview one-liner:** "kubelet is the node agent that talks to the API server and manages Pods; containerd is the runtime that pulls images and runs containers. Both run as systemd services, not Pods."
+
+### ECR: one registry, many repositories
+
+| Word | Meaning | In this lab |
+|---|---|---|
+| **Registry** | Your **one** ECR per AWS account + region | `<account-id>.dkr.ecr.us-east-1.amazonaws.com` |
+| **Repository** | A folder for **one app's images** (all its versions) | `prod-frontend`, `prod-backend` |
+| **Tag** | One version of an image | `v1`, `v2`, `v3` |
+
+```
+<account-id>.dkr.ecr.us-east-1.amazonaws.com     ← registry (one)
+ ├── prod-frontend                               ← repository
+ │     ├── v1
+ │     └── v2
+ └── prod-backend                                ← repository
+       ├── v1
+       └── v2
+```
+
+Full image name a Pod pulls: `<account-id>.dkr.ecr.us-east-1.amazonaws.com/prod-backend:v2`
+
+**Why one repository per app?**
+- Each app has its **own versions**: frontend on `v5`, backend on `v2`.
+- **Separate permissions**: the frontend CI can push only to `prod-frontend`.
+- **Separate scan results and cleanup rules** per app.
+
+> 🎯 **Interview one-liner:** "ECR has one registry per account and region; I create one repository per microservice, with immutable tags for versions."
+
 ### What is IMDS and why hop limit 1?
 
 **IMDS (Instance Metadata Service)** = a special address (`169.254.169.254`) every EC2 machine can call to get information about itself, **including temporary AWS credentials of the node's IAM role**.
