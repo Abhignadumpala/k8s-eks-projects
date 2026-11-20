@@ -125,6 +125,63 @@ A simple practice cluster **works**, but it isn't how companies run Kubernetes. 
 | **Taint** | A "keep out" rule on a node. Pods are refused unless they have a matching **toleration** |
 | **Toleration** | A "pass" in the Pod's YAML that lets it ignore a taint |
 
+**Nodes** are the EC2 machines where Pods run. In production we split them into two groups, each with its own job.
+
+| | **System nodes** | **App nodes** |
+|---|---|---|
+| **What runs there** | Cluster tools: CoreDNS, Argo CD, Prometheus, Grafana, Karpenter, EBS CSI driver | Only **your application**: frontend, backend |
+| **Label** | `role = system` | `role = app` |
+| **Taint** | none | `workload=app:NoSchedule` |
+| **Size in this lab** | min 2, max 4, start with 2 | min 2, max 4, start with 2 |
+
+#### Why separate them?
+
+Think of a **hospital**:
+- 🏥 **System nodes** = the power, water and oxygen supply. If these fail, *everything* fails.
+- 👩‍⚕️ **App nodes** = the patient wards, where the real work happens.
+
+You never put patients in the power room.
+
+**Without the split:** your backend has a memory leak and uses all the RAM on a node. Kubernetes starts killing Pods to free memory, and it may kill **CoreDNS**. Now *every* app in the cluster loses DNS and the whole cluster breaks. 💥
+
+**With the split:** the backend can only hurt its own app nodes. CoreDNS and monitoring keep running on the system nodes, so you can still see what is wrong and fix it. ✅
+
+#### How do Pods go to the right nodes?
+
+**1. A taint on the app nodes** (in `eks.tf`):
+
+```hcl
+taints = { app = { key = "workload", value = "app", effect = "NO_SCHEDULE" } }
+```
+
+This is a "🚫 No entry" sign on the app nodes. No Pod can run there **unless** it has a matching **toleration**. So the cluster tools (CoreDNS and so on) cannot land on app nodes; they go to the system nodes automatically.
+
+**2. Your app's Deployment** (in later steps) gets two things:
+
+```yaml
+tolerations:                 # the "pass" for the No entry sign
+  - key: workload
+    value: app
+    effect: NoSchedule
+nodeSelector:
+  role: app                  # "I want to go to app nodes"
+```
+
+| Setting | What it does |
+|---|---|
+| `tolerations` | The Pod is **allowed** on app nodes |
+| `nodeSelector` | The Pod **must go** to app nodes |
+
+You need **both**: a toleration only lets the Pod in, it does not send it there.
+
+#### Why `min = 2` for each group?
+
+2 nodes in different AZs means **if one node or one AZ dies, the other keeps running**. One node = a single point of failure, which is not acceptable in production.
+
+> 🎯 **Interview one-liner:** "I separate system and app node groups and taint the app nodes, so cluster-critical add-ons like CoreDNS and monitoring are isolated from application workloads. A noisy app can't take down the cluster."
+
+You will **see this live** in Task 7: `kubectl get nodes -L role` shows 2 `system` + 2 `app` nodes, and `kubectl describe nodes -l role=app | grep Taints` shows the taint.
+
 ### What is IMDS and why hop limit 1?
 
 **IMDS (Instance Metadata Service)** = a special address (`169.254.169.254`) every EC2 machine can call to get information about itself, **including temporary AWS credentials of the node's IAM role**.
