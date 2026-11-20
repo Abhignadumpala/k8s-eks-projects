@@ -290,6 +290,35 @@ hop limit 2 (risky):  Pod ──► node ──► IMDS  ✅ answer reaches the 
 hop limit 1 (safe):   Pod ──► node ──► IMDS  ❌ answer stops at the node
 ```
 
+#### Why we do this (simple story)
+
+**The node has a key 🔑.** Every node has an IAM role with real AWS permissions (pull from ECR, attach EBS disks, manage network cards, read EC2 info).
+
+Imagine a hacker breaks into **one** app Pod (a bug in the frontend). From inside it, they call IMDS:
+
+| Without hop limit 1 ❌ | With hop limit 1 ✅ |
+|---|---|
+| Hacker asks IMDS: "give me the node's key" | Hacker asks IMDS |
+| IMDS sends the node's AWS credentials **to the Pod** | The answer **stops at the node**, never reaches the Pod |
+| Hacker now has the node's AWS permissions, usable from anywhere | Hacker gets **nothing**. Damage stays inside one Pod |
+
+**One small hacked app becomes a hacked AWS account.** That is what we stop.
+
+**Analogy 🏢:** the master key is at reception (the node). Only reception can use it. A visitor (Pod) who sneaks in can't take it.
+
+#### When do we need it?
+
+| Situation | Need it? |
+|---|---|
+| **Production EKS** | ✅ **Always**, it is in the AWS EKS security best practices |
+| Apps exposed to the internet (web apps, APIs) | ✅ Yes, these Pods are the most likely to be attacked |
+| Many teams or apps on one cluster | ✅ Yes, one team's bug must not expose everyone |
+| A practice cluster destroyed after 1 hour | Optional, but a good habit |
+
+**Rule:** turn it on from day 1 in production, and give each app **its own small role** with Pod Identity. A hacked Pod then has only its own tiny permissions, not the node's.
+
+> 🎯 **Simple interview answer:** "If a Pod gets hacked, it shouldn't be able to steal the node's AWS credentials. Hop limit 1 blocks Pods from reaching IMDS, and Pod Identity gives each app only the permissions it needs."
+
 #### What is a "hop"?
 
 A **hop** = one step a network packet takes from one network to the next (one router or one network "door").
