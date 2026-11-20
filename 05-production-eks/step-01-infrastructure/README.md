@@ -319,6 +319,36 @@ Imagine a hacker breaks into **one** app Pod (a bug in the frontend). From insid
 
 > 🎯 **Simple interview answer:** "If a Pod gets hacked, it shouldn't be able to steal the node's AWS credentials. Hop limit 1 blocks Pods from reaching IMDS, and Pod Identity gives each app only the permissions it needs."
 
+#### Node role vs Pod Identity vs ServiceAccount
+
+**Both nodes and Pods use IAM roles, just different ones:**
+
+| Who | Gets permissions from | Which role | Example |
+|---|---|---|---|
+| **Node** | Its **node IAM role**, via IMDS | One role for the node | Pull images from ECR, attach EBS disks |
+| **Pod** | **Pod Identity** | Its **own small role per app** | Backend: read only its secret. Frontend: nothing |
+
+**ServiceAccount = the Pod's identity (an ID card 🪪).** On its own it gives **no permissions**. Permissions come from what you attach to it, in two worlds:
+
+| World | Lets the Pod… | Attached how |
+|---|---|---|
+| **Kubernetes** | Talk to the Kubernetes API (list Pods, read ConfigMaps) | **RBAC**: Role + RoleBinding → ServiceAccount |
+| **AWS** | Use AWS services (S3, Secrets Manager) | **Pod Identity**: IAM role ↔ ServiceAccount association |
+
+```
+                    ServiceAccount "backend"  (the ID card)
+                     │                       │
+           RBAC RoleBinding           Pod Identity association
+                     │                       │
+      Kubernetes permissions        AWS permissions (IAM role)
+                     │                       │
+                     └── backend Pod: serviceAccountName: backend ──┘
+```
+
+A Pod with no `serviceAccountName` uses `default`, which has **no permissions**: safe by default. You build this in **Step 05**.
+
+> 🎯 **Interview one-liner:** "Nodes get permissions from the node IAM role. A ServiceAccount is the Pod's identity: RBAC binds Kubernetes permissions to it, and Pod Identity links it to an IAM role for AWS permissions."
+
 #### What is a "hop"?
 
 A **hop** = one step a network packet takes from one network to the next (one router or one network "door").
