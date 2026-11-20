@@ -712,6 +712,42 @@ module "vpc" {
 
 > Without those subnet tags, a `Service type: LoadBalancer` or an Ingress can't find where to create the load balancer.
 
+#### The subnet tags, explained
+
+**Tags** are labels (key = value) on AWS resources. Usually they are only for humans (`Name`, `Project`). These ones are different: **Kubernetes reads them** to make decisions.
+
+When you create a `Service type: LoadBalancer` or an Ingress, Kubernetes (the **AWS Load Balancer Controller**) asks AWS to build a load balancer. The first question it has is: **"In which subnets do I put it?"** It answers that by searching for subnets with these tags.
+
+| Tag | On | Meaning |
+|---|---|---|
+| `kubernetes.io/role/elb = 1` | Public subnets | "Put **internet-facing** load balancers here." Users on the internet reach your app through them |
+| `kubernetes.io/role/internal-elb = 1` | Private subnets | "Put **internal** load balancers here." Only reachable inside the VPC (service to service, or over VPN) |
+| `kubernetes.io/cluster/abhigna-prod = shared` | Both | "These subnets belong to cluster `abhigna-prod`." `shared` = other clusters may use them too (the other value, `owned`, means only this cluster) |
+| `Name = abhigna-prod-vpc` | The VPC | Just a name you see in the AWS console |
+
+`${var.cluster_name}` is replaced by Terraform with `abhigna-prod`, so the real tag is `kubernetes.io/cluster/abhigna-prod`.
+
+```
+User on the internet
+        │
+        ▼
+Public subnets  (role/elb = 1)          ← internet-facing ALB lands here
+        │
+        ▼
+Private subnets (role/internal-elb = 1) ← worker nodes + internal load balancers
+```
+
+**Which one does Kubernetes pick?** It depends on one setting in your YAML:
+
+```yaml
+alb.ingress.kubernetes.io/scheme: internet-facing   # → public subnets
+alb.ingress.kubernetes.io/scheme: internal          # → private subnets
+```
+
+**Without these tags:** the load balancer is never created. The Ingress stays with an empty `ADDRESS`, and the controller logs say *"couldn't auto-discover subnets"*. A very common EKS problem.
+
+> 🎯 **Interview one-liner:** "I tag public subnets with `kubernetes.io/role/elb` and private subnets with `kubernetes.io/role/internal-elb`, so the AWS Load Balancer Controller can auto-discover where to place internet-facing and internal load balancers."
+
 ---
 
 ### `eks.tf`: the cluster
