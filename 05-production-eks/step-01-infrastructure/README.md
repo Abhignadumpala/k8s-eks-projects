@@ -290,6 +290,37 @@ hop limit 2 (risky):  Pod ──► node ──► IMDS  ✅ answer reaches the 
 hop limit 1 (safe):   Pod ──► node ──► IMDS  ❌ answer stops at the node
 ```
 
+#### What is a "hop"?
+
+A **hop** = one step a network packet takes from one network to the next (one router or one network "door").
+
+Every packet carries a counter called **TTL** (Time To Live). Each hop **subtracts 1**. When it reaches **0**, the packet is thrown away.
+
+**Why a Pod is one extra hop away:** a Pod has its **own little network** (its own network namespace and IP), separate from the node. So an answer from IMDS must travel:
+
+```
+IMDS ──hop 1──► node ──hop 2──► Pod
+```
+
+| Hop limit | IMDS answer starts with TTL | Reaches the node? | Reaches a Pod? |
+|---|---|---|---|
+| **2** (risky) | 2 | ✅ (TTL 1 left) | ✅ (TTL 0, just arrives) → Pod can steal node credentials |
+| **1** (safe) | 1 | ✅ (TTL 0, just arrives) | ❌ dropped on the way |
+
+**Analogy 🏠:** a parcel with "deliver within 1 step". The house (node) receives it; the room inside the house (Pod) never does.
+
+#### The 3 settings
+
+| Setting | Meaning |
+|---|---|
+| `http_endpoint = "enabled"` | IMDS is on. The node itself still needs it (kubelet, the node's own AWS calls) |
+| `http_tokens = "required"` | **IMDSv2 only**: a caller must first get a session token with a `PUT` request. Blocks old v1 style attacks (SSRF) that use a simple `GET` |
+| `http_put_response_hop_limit = 1` | The **token answer** can travel only 1 hop: reaches the node, never a Pod. No token = no credentials |
+
+**So how do Pods get AWS access?** Not from the node. Each app gets **its own small IAM role through Pod Identity** (Step 05): least privilege per app.
+
+> ⚠️ Exception: a Pod with `hostNetwork: true` uses the node's network directly (no extra hop), so it can still reach IMDS. That is one reason Kyverno (Step 06) blocks `hostNetwork` for app Pods.
+
 > **Interview one-liner:** "I set the IMDS hop limit to 1 so Pods can't use the node's IAM role. Pods get AWS access only through Pod Identity, each with its own role."
 
 ### The bastion: why we create it, what it can do, what we use it for
