@@ -1343,7 +1343,7 @@ output "bastion_ssh_command" {
 | `associate_public_ip_address = true` | A public IP, so you can reach it from your laptop |
 | `root_block_device { 30 GB, gp3, encrypted }` | Its disk: 30 GB, fast `gp3`, encrypted |
 | `delete_on_termination = true` | The disk is deleted with the machine (no leftover cost) |
-| `depends_on = [module.eks]` | Create the bastion **after** the cluster, because its first-boot script connects to the cluster |
+| `depends_on = [module.eks]` | Create the bastion **after** the cluster, because its first-boot script connects to the cluster. ⚠️ `module.eks` means **everything** inside the module: cluster, node groups **and add-ons**. If one part fails (e.g. an add-on stuck in `CREATING`), the module is not finished, so Terraform **skips** the bastion. Fix the failed part, run `apply` again, and the bastion is created |
 | `user_data = templatefile(...)` | Run `bastion_bootstrap.sh.tpl` on first boot, filling in `aws_region` and `cluster_name` |
 
 **6. Outputs**
