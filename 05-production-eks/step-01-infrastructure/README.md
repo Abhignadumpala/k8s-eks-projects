@@ -1832,16 +1832,6 @@ terraform apply
 
 > Shows the plan again and asks for confirmation: type `yes`. It takes about **20 minutes** (the EKS control plane is the slow part). Don't close the terminal.
 
-> **Can I walk away?** Yes.
->
-> | Laptop does | apply keeps running? |
-> |---|---|
-> | 🔒 Screen locks | ✅ Yes. Locking only hides the screen; programs keep running |
-> | 💤 Sleep / suspend | ❌ No. The network stops and apply fails halfway. Turn it off: *Settings → Power → Automatic Suspend → Off* |
-> | ❌ Terminal closed | ❌ No. apply is stopped |
->
-> Interrupted anyway? Nothing is lost: Terraform saves each finished resource in `terraform.tfstate`. Just run `terraform apply` again and it creates only what's missing.
-
 ✅ **Check:** the end says **`Apply complete! Resources: 82 added`** and prints the outputs: `bastion_public_ip`, `bastion_ssh_command`, `cluster_name = "abhigna-prod"`, `node_groups = ["app", "system"]`, `ecr_repository_urls`...
 
 ---
