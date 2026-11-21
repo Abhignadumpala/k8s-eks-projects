@@ -1343,7 +1343,7 @@ output "bastion_ssh_command" {
 | `associate_public_ip_address = true` | A public IP, so you can reach it from your laptop |
 | `root_block_device { 30 GB, gp3, encrypted }` | Its disk: 30 GB, fast `gp3`, encrypted |
 | `delete_on_termination = true` | The disk is deleted with the machine (no leftover cost) |
-| `depends_on = [module.eks]` | Create the bastion **after** the cluster, because its first-boot script connects to the cluster. ⚠️ `module.eks` means **everything** inside the module: cluster, node groups **and add-ons**. If one part fails (e.g. an add-on stuck in `CREATING`), the module is not finished, so Terraform **skips** the bastion. Fix the failed part, run `apply` again, and the bastion is created |
+| `depends_on = [module.eks]` | Create the bastion **after** the cluster, because its first-boot script connects to the cluster. <sub>(If any part of `module.eks` fails, e.g. an add-on, the bastion is skipped too.)</sub> |
 | `user_data = templatefile(...)` | Run `bastion_bootstrap.sh.tpl` on first boot, filling in `aws_region` and `cluster_name` |
 
 **6. Outputs**
@@ -1796,31 +1796,19 @@ terraform init
 terraform fmt
 ```
 
-> **fmt = format.** It fixes the **look** of the code: spacing, indentation, lining up the `=` signs. It changes the files itself, then prints the names of the files it changed. **No output = everything was already tidy.** It does not check whether the code is correct.
-
 ```bash
 terraform validate
 ```
 
-> **validate = check the code is correct**, without talking to AWS. It catches mistakes like these:
+<details><summary><sub>💡 Note: fmt vs validate</sub></summary>
 
-| validate catches | Example |
-|---|---|
-| Spelling / syntax errors | a missing `}` or `"` |
-| Unknown arguments | `instanse_type` instead of `instance_type` |
-| Wrong value types | text where a number is expected |
-| Broken references | `module.vpc.privte_subnets` (no such output) |
-| Missing required settings | a resource without a setting it needs |
+<sub>
 
-> It does **not** catch AWS problems: a wrong key pair name, an EKS version AWS doesn't offer, or a quota that's too low. Those show up only at `plan` / `apply`, when Terraform talks to AWS.
+- **fmt** fixes spacing only. No output = already tidy.
+- **validate** checks syntax, names and references offline. It can't catch AWS problems (wrong key pair, quota): those appear at `plan`.
 
-| Command | Checks | Talks to AWS? | Changes files? |
-|---|---|---|---|
-| `terraform fmt` | How the code **looks** | No | Yes (spacing only) |
-| `terraform validate` | Whether the code is **correct** | No | No |
-| `terraform plan` | What would change in **AWS** | Yes (reads only) | No |
-
-> 💡 Interview one-liner: *"fmt formats, validate checks syntax and references offline, plan compares the code with real AWS."* In CI, use `terraform fmt -check` to fail the pipeline when code isn't formatted.
+</sub>
+</details>
 
 ✅ **Check:** `validate` prints **Success! The configuration is valid.**
 
@@ -1840,30 +1828,17 @@ terraform plan
 
 > A **preview only**. Scroll through it: you should see the VPC and subnets, `aws_eks_cluster`, node groups `["system"]` and `["app"]`, the add-ons `eks-pod-identity-agent` and `aws-ebs-csi-driver`, 2 `aws_ecr_repository` and `aws_instance.bastion`. The last line: **`Plan: 82 to add, 0 to change, 0 to destroy.`**
 
-> **Reading the end of the plan:**
->
-> | You see | Means |
-> |---|---|
-> | `(known after apply)` | AWS creates that value (an IP, an ID), so Terraform can't know it yet |
-> | `github_ci_role_arn = ""`, `karpenter_queue_name = ""`, `mysql_secret_name = ""`... | Empty on purpose: their switches in `terraform.tfvars` are still `false`. They fill in when you turn them on in Steps 06–10 |
-> | `Note: You didn't use the -out option...` | Safe to ignore in a lab. `apply` makes a fresh plan and shows it again before you type `yes`. In teams/CI you'd save it (`terraform plan -out=tfplan`, then `terraform apply tfplan`) so exactly the reviewed plan is applied |
+<details><summary><sub>💡 Note: reading the plan output</sub></summary>
 
-#### What the 82 resources are
+<sub>
 
-| Group | Count | What gets created | File |
-|---|---|---|---|
-| 🌐 **Network** | 23 | 1 VPC · 6 subnets (3 public, 3 private) · 1 internet gateway · 1 NAT gateway + 1 Elastic IP · 2 route tables + 2 routes + 6 route-table links · 3 VPC defaults (locked down) | `vpc.tf` |
-| ☸️ **EKS cluster** | 34 | 1 cluster · 1 log group (audit logs) · 1 KMS key + 1 alias (encrypts Secrets) · 1 cluster IAM role + 2 policies + 4 policy attachments · 1 OIDC provider · 2 security groups (cluster, nodes) + 12 rules · 2 access entries (you, bastion) + 1 admin link · 2 add-ons (Pod Identity agent, EBS CSI) + 1 EBS CSI IAM role + 1 attachment · 1 wait timer | `eks.tf` |
-| 🖥️ **Node groups** | 16 | Per group (system, app) **×2**: 1 node group · 1 launch template (IMDS hop 1, encrypted disk) · 1 IAM role + 4 policy attachments (worker, CNI, ECR read, SSM) · 1 CIDR check | `eks.tf` |
-| 🔑 **Bastion** | 7 | 1 EC2 instance · 1 security group (SSH from your IP) · 1 IAM role + 1 inline policy + 1 attachment (ECR read) + 1 instance profile · 1 ClusterRoleBinding (`bastion-admin` → cluster-admin) | `bastion.tf`, `eks.tf` |
-| 📦 **ECR** | 2 | `prod-frontend`, `prod-backend` repositories | `ecr.tf` |
-| **Total** | **82** | | |
+- `(known after apply)`: AWS creates that value (IP, ID) later.
+- `github_ci_role_arn = ""` etc.: empty on purpose, their switches are still `false`.
+- `You didn't use the -out option`: safe to ignore in a lab.
+- **The 82:** network 23 · EKS cluster 34 · node groups 16 · bastion 7 · ECR 2. CoreDNS, kube-proxy and VPC CNI come free with EKS.
 
-> **Not in the 82:** CoreDNS, kube-proxy and the VPC CNI. EKS installs them **automatically** with every cluster, so Terraform doesn't create them.
->
-> 💡 **Why so many?** One "thing" in the console is often several Terraform resources. A security group and each of its rules are separate resources, and so are an IAM role and each policy attached to it. This lets Terraform change one rule without rebuilding the whole group.
->
-> See the full list yourself: `terraform state list` (after apply), or `terraform plan | grep "will be created"` (before).
+</sub>
+</details>
 
 ```bash
 terraform apply
@@ -1953,7 +1928,7 @@ terraform destroy
 
 | Error | Why it happens | Fix |
 |---|---|---|
-| `connection reset by peer` during `terraform init` | The download was cut off. Often an IPv6 network problem: the connection to HashiCorp's servers drops randomly, so some providers download and some don't | Run `terraform init` again (2–3 times is normal). Each run **keeps** the providers already downloaded (plugin cache) and only retries the failed ones, so every run gets closer. Still failing? Try another network (e.g. phone hotspot) |
+| `connection reset by peer` during `terraform init` | The download was cut off. Often an IPv6 network problem | Run `terraform init` again (2–3 times is normal; finished downloads are kept). Still failing? Try another network (e.g. phone hotspot) |
 | `InvalidKeyPair.NotFound` | `key_pair_name` doesn't exist in us-east-1 | Do Task 1, or fix `key_pair_name` in `terraform.tfvars` |
 | `Unsupported Kubernetes version` | That version isn't offered any more | Pick a `STANDARD_SUPPORT` version: `aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text` |
 | `VcpuLimitExceeded` | Your account's vCPU quota is too low for 5 machines | Request a quota increase in *Service Quotas*, or lower `desired`/`min` in `terraform.tfvars` |
