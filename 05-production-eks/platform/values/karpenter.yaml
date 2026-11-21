@@ -1,0 +1,25 @@
+# ───────────────────────────────────────────────
+# Step 09: Karpenter controller
+# Runs on the system nodes (the app nodes are tainted), uses Pod Identity
+# (kube-system/karpenter, Terraform). AWS_REGION is set because Pods can't
+# ask the node's metadata service (IMDS hop limit 1).
+# ───────────────────────────────────────────────
+settings:
+  clusterName: abhigna-prod
+  interruptionQueue: Karpenter-abhigna-prod   # SQS queue from Terraform
+
+serviceAccount:
+  name: karpenter                             # matches the Pod Identity association
+
+replicas: 2
+
+controller:
+  env:
+    - name: AWS_REGION
+      value: us-east-1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 1Gi

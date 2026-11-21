@@ -1,0 +1,39 @@
+# ───────────────────────────────────────────────
+# Step 02: run all 3 tiers on your laptop before building for AWS
+#   docker compose up --build
+#   open http://localhost:8081
+# Lab-only passwords: in EKS the passwords come from AWS Secrets Manager.
+# ───────────────────────────────────────────────
+services:
+  mysql:
+    image: public.ecr.aws/docker/library/mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: localroot
+      MYSQL_DATABASE: tasksdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: localpass
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DB_HOST: mysql
+      DB_USER: appuser
+      DB_PASSWORD: localpass
+      DB_NAME: tasksdb
+      APP_VERSION: local
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8080
+    ports:
+      - "8081:8080"
+    depends_on:
+      - backend

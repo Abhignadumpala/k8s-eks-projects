@@ -1,0 +1,2 @@
+# Step 08: Istio CNI node agent (redirects Pod traffic to ztunnel)
+profile: ambient

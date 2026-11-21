@@ -1,0 +1,95 @@
+# ───────────────────────────────────────────────
+# Tier 3 — MySQL. Stateful → StatefulSet
+#   - stable Pod name: mysql-0
+#   - own disk: PVC data-mysql-0 → encrypted EBS gp3 volume (EBS CSI driver)
+#   - headless Service (clusterIP: None) → DNS name "mysql" points to the Pod
+#   - runs as user 999 (mysql), not root
+# Production note: real companies usually use Amazon RDS (Multi-AZ) instead.
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  clusterIP: None          # headless
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      serviceAccountName: mysql
+      {{- include "three-tier.scheduling" . | nindent 6 }}
+      {{- include "three-tier.podSecurity" (dict "uid" 999) | nindent 6 }}
+      containers:
+        - name: mysql
+          image: {{ .Values.mysql.image }}
+          # Data in a sub-folder: the EBS disk has a lost+found folder,
+          # and MySQL needs an empty data directory
+          args: ["--datadir=/var/lib/mysql/data"]
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MYSQL_DATABASE
+              value: {{ .Values.mysql.database | quote }}
+            - name: MYSQL_USER
+              value: {{ .Values.mysql.user | quote }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: mysql-secret, key: password }
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: mysql-secret, key: root-password }
+          {{- include "three-tier.containerSecurity" . | nindent 10 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/mysql }
+            # read-only root filesystem: MySQL still needs these writable folders
+            - { name: run, mountPath: /var/run/mysqld }
+            - { name: tmp, mountPath: /tmp }
+            - { name: files, mountPath: /var/lib/mysql-files }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\""]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: mysql }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.mysql.resources | nindent 12 }}
+      volumes:
+        - { name: run, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+        - { name: files, emptyDir: {} }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storageClass.name }}
+        resources:
+          requests:
+            storage: {{ .Values.mysql.storage.size }}

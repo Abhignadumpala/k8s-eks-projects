@@ -1,0 +1,46 @@
+# ───────────────────────────────────────────────
+# Step 07: our app images must be signed with OUR Cosign key (Step 02).
+# An image built or changed by someone else has no valid signature → blocked.
+#   - Kyverno reads the signature from ECR with its own Pod Identity role
+#     (credentials.providers: amazon)
+#   - MySQL (public image) is not matched: only prod-* repos are checked
+# 📝 Paste the content of your cosign.pub between the markers below.
+# ───────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: verify-app-image-signatures
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  webhookConfiguration:
+    timeoutSeconds: 15
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: three-tier
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: "*.dkr.ecr.us-east-1.amazonaws.com/prod-*"
+  credentials:
+    providers: [amazon]
+  validationConfigurations:
+    mutateDigest: false     # keep the tag as written (Argo CD would see a change otherwise)
+    verifyDigest: false
+    required: true
+  attestors:
+    - name: cosign
+      cosign:
+        key:
+          data: |
+            -----BEGIN PUBLIC KEY-----
+            PASTE-THE-MIDDLE-LINES-OF-YOUR-cosign.pub-HERE
+            -----END PUBLIC KEY-----
+  validations:
+    - expression: >-
+        images.containers.map(image, verifyImageSignatures(image, [attestors.cosign])).all(e, e > 0)
+      message: "Image is not signed with our Cosign key (Step 02)."

@@ -1,0 +1,35 @@
+# ───────────────────────────────────────────────
+# Step 11: our own alert rules (Prometheus Operator "PrometheusRule")
+#   BackendHighErrorRate → more than 5% of backend requests fail (5xx) for 2 min
+#   BackendDown          → Prometheus can't scrape any backend Pod for 2 min
+# kube-prometheus-stack already ships ~100 cluster alerts (CrashLooping,
+# node NotReady, disk full...). These two are about OUR app.
+# ───────────────────────────────────────────────
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: three-tier-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: three-tier.rules
+      rules:
+        - alert: BackendHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="three-tier", status=~"5.."}[5m]))
+              /
+            sum(rate(http_requests_total{namespace="three-tier"}[5m])) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backend 5xx error rate above 5%"
+            description: "{{ $value | humanizePercentage }} of backend requests are failing."
+        - alert: BackendDown
+          expr: |
+            sum(up{namespace="three-tier", service="backend"}) == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "No backend Pod can be scraped"

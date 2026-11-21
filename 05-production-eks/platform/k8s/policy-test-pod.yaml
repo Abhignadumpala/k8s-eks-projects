@@ -1,0 +1,34 @@
+# ───────────────────────────────────────────────
+# Step 07: a well-behaved test Pod (passes Pod Security "restricted"),
+# so ONLY the Kyverno rules decide if it is allowed.
+# The image is filled in when you apply it:
+#   TEST_IMAGE=nginx:latest envsubst < policy-test-pod.yaml | kubectl apply -f -
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: Pod
+metadata:
+  name: policy-test
+  namespace: three-tier
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  nodeSelector:
+    role: app
+  tolerations:
+    - { key: workload, operator: Equal, value: app, effect: NoSchedule }
+  containers:
+    - name: test
+      image: ${TEST_IMAGE}
+      command: ["sleep", "300"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits:   { memory: 32Mi }

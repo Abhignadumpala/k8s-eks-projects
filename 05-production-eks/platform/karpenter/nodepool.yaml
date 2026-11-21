@@ -1,0 +1,64 @@
+# ───────────────────────────────────────────────
+# Step 09: what kind of nodes Karpenter may create for the app
+#   EC2NodeClass = HOW to build a node (AMI, subnets, security group, IAM role)
+#   NodePool     = WHICH nodes and WHEN (Spot or On-Demand, sizes, taint, limits)
+# Same label + taint as the "app" node group, so app Pods fit on them.
+# ───────────────────────────────────────────────
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: app
+spec:
+  role: abhigna-prod-karpenter-node          # IAM role from Terraform (karpenter.tf)
+  amiSelectorTerms:
+    - alias: al2023@latest                    # Amazon Linux 2023 EKS-optimized
+  subnetSelectorTerms:                        # the PRIVATE subnets (tags from Step 01)
+    - tags:
+        kubernetes.io/role/internal-elb: "1"
+        kubernetes.io/cluster/abhigna-prod: shared
+  securityGroupSelectorTerms:                 # same security group as our other nodes
+    - tags:
+        Name: abhigna-prod-node
+  metadataOptions:                            # IMDSv2, hop limit 1 (like Step 01)
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: app
+spec:
+  template:
+    metadata:
+      labels:
+        role: app
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: app
+      taints:
+        - key: workload
+          value: app
+          effect: NoSchedule
+      requirements:
+        - key: karpenter.sh/capacity-type     # Spot first (up to ~70% cheaper), On-Demand as backup
+          operator: In
+          values: ["spot", "on-demand"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: ["large", "xlarge"]
+      expireAfter: 720h                       # replace nodes every 30 days (fresh, patched AMI)
+  limits:                                     # never more than this in total (cost guard)
+    cpu: "16"
+    memory: 64Gi
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 1m                      # remove empty/underused nodes after 1 min

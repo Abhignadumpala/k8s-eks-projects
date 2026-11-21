@@ -1,0 +1,32 @@
+# ───────────────────────────────────────────────
+# Step 09: "inflate" = empty Pods that each reserve 1 CPU on the app nodes.
+# Starts with 0 replicas. Scale it up → Pods don't fit → Karpenter adds nodes.
+# Scale it to 0 → nodes are empty → Karpenter removes them.
+# ───────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inflate
+  namespace: loadtest
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: inflate
+  template:
+    metadata:
+      labels:
+        app: inflate
+    spec:
+      nodeSelector:
+        role: app
+      tolerations:
+        - { key: workload, operator: Equal, value: app, effect: NoSchedule }
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: inflate
+          image: public.ecr.aws/eks-distro/kubernetes/pause:3.10
+          resources:
+            requests:
+              cpu: "1"
+              memory: 256Mi

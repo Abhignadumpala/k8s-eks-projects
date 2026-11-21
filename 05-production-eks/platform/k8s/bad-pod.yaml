@@ -1,0 +1,18 @@
+# ───────────────────────────────────────────────
+# Step 05: a Pod that breaks the "restricted" Pod Security Standard on purpose.
+# Applying it to the three-tier namespace must FAIL. That is the test.
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-root-pod
+  namespace: three-tier
+spec:
+  containers:
+    - name: shell
+      image: public.ecr.aws/docker/library/busybox:1.37
+      command: ["sleep", "3600"]
+      securityContext:
+        runAsUser: 0                    # root ❌
+        privileged: true                # full access to the node ❌
+        allowPrivilegeEscalation: true  # ❌

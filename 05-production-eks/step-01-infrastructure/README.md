@@ -1,6 +1,6 @@
 # Step 01 — Infrastructure
 
-[⬅ Back to the project overview](../README.md)
+[⬅ Back to the project overview](../README.md) · [Step 02 ➡](../step-02-secure-images/README.md)
 
 ## What you will build in this step
 
@@ -496,7 +496,8 @@ All the code is in [`05-production-eks/terraform/`](../terraform):
 ├── bastion.tf                 the admin jump box + its IAM role
 ├── bastion_bootstrap.sh.tpl   script that sets up the bastion on first boot
 ├── ecr.tf                     2 private image repositories
-└── outputs.tf                 values printed after apply
+├── outputs.tf                 values printed after apply
+├── platform_*.tf, karpenter.tf, github_oidc.tf, iam/   for Steps 03–10 (switched off now)
 ```
 
 ### Terraform words you will see
@@ -542,6 +543,10 @@ terraform {
       source  = "hashicorp/cloudinit"
       version = "~> 2.3"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
@@ -575,7 +580,7 @@ provider "kubernetes" {
 | Block | What it does |
 |---|---|
 | `required_version = ">= 1.5.0"` | Terraform itself must be version 1.5 or newer |
-| `required_providers { aws, kubernetes, tls, cloudinit }` | Plugins to download in `terraform init`. `aws` talks to AWS, `kubernetes` talks to the cluster |
+| `required_providers { aws, kubernetes, tls, cloudinit, random }` | Plugins to download in `terraform init`. `aws` talks to AWS, `kubernetes` talks to the cluster, `random` makes passwords (Step 06) |
 | `version = "~> 5.0"` | Any 5.x version (not 6.0), so a big new release can't break the code |
 | `provider "aws" { region = var.aws_region }` | Create everything in `us-east-1` |
 | `default_tags { Project, ManagedBy }` | Every AWS resource gets these tags automatically → easy to find, and you can see it was made by Terraform |
@@ -746,6 +751,14 @@ app_nodes           = { min = 2, max = 4, desired = 2 }
 
 # ECR
 ecr_repos = ["prod-frontend", "prod-backend"]
+
+# Later steps: switches. Leave all false in Step 01.
+# Each step tells you which one to set to true (then run terraform apply).
+enable_lb_controller    = false # Step 03
+enable_external_secrets = false # Step 06
+enable_kyverno_ecr      = false # Step 07
+enable_karpenter        = false # Step 09
+enable_github_oidc      = false # Step 10
 ```
 
 **Explained:**
@@ -768,6 +781,7 @@ terraform.tfvars    →  "for MY project, cluster_name = abhigna-prod"     ← t
 | `node_instance_types` | `m7i-flex.large` | Worker size: 2 vCPU, 8 GB RAM |
 | `system_nodes`, `app_nodes` | `{ min = 2, max = 4, desired = 2 }` | Each group starts with 2 nodes, never fewer than 2, never more than 4 |
 | `ecr_repos` | `prod-frontend`, `prod-backend` | The 2 image repositories |
+| `enable_*` | all `false` | **On/off switches for later steps.** They live in `platform_*.tf`, `karpenter.tf` and `github_oidc.tf`; while `false`, those files create **nothing** (that's why the plan still says 82). Each later step turns one on |
 
 ---
 
@@ -1647,7 +1661,7 @@ cd ~/k8s-eks-projects/05-production-eks/terraform
 ls
 ```
 
-> Shows: `bastion.tf  bastion_bootstrap.sh.tpl  ecr.tf  eks.tf  outputs.tf  providers.tf  terraform.tfvars  variables.tf  vpc.tf`
+> Shows: `bastion.tf  bastion_bootstrap.sh.tpl  ecr.tf  eks.tf  outputs.tf  providers.tf  terraform.tfvars  variables.tf  vpc.tf`, plus `github_oidc.tf  iam  karpenter.tf  platform_iam.tf  platform_outputs.tf  platform_variables.tf` for later steps (switched off in Step 01)
 
 > 💡 Your terminal prompt should end with `05-production-eks/terraform$`. If you open a new terminal, run the `cd` above again first.
 
@@ -1910,5 +1924,5 @@ It's a single admin entry point inside the VPC with the right tool versions. It 
 
 ---
 
-[⬅ Back to the project overview](../README.md) · Next: Step 02 — Secure images (coming soon)
+[⬅ Back to the project overview](../README.md) · Next: [Step 02 — Secure images ➡](../step-02-secure-images/README.md)
 

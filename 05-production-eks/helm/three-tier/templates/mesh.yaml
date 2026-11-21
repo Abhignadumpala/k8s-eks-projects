@@ -1,0 +1,63 @@
+# ───────────────────────────────────────────────
+# Step 08: Istio ambient mesh rules
+#   PeerAuthentication STRICT → backend and mysql accept ONLY mTLS traffic
+#   AuthorizationPolicy       → frontend → backend → mysql, nothing else
+# The frontend stays PERMISSIVE: it receives plain HTTP from the ALB.
+# Identities come from the ServiceAccounts (serviceaccounts.yaml).
+# ───────────────────────────────────────────────
+{{- if .Values.mesh.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- range $app := list "backend" "mysql" }}
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ $app }}-strict-mtls
+  labels:
+    {{- include "three-tier.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $app }}
+  mtls:
+    mode: STRICT
+{{- end }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: backend-allow-frontend
+  labels:
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/{{ $ns }}/sa/frontend"]
+    {{- if .Values.mesh.allowMonitoringNamespace }}
+    # Step 11: Prometheus scrapes /metrics
+    - from:
+        - source:
+            namespaces: [{{ .Values.mesh.allowMonitoringNamespace | quote }}]
+    {{- end }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: mysql-allow-backend
+  labels:
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/{{ $ns }}/sa/backend"]
+{{- end }}

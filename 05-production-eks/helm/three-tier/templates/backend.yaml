@@ -1,0 +1,105 @@
+# ───────────────────────────────────────────────
+# Tier 2 — backend (Node.js API). Stateless.
+#   rollout.enabled=false → normal Deployment (rolling update)
+#   rollout.enabled=true  → Argo Rollouts canary (Step 10)
+# Service type ClusterIP → only reachable inside the cluster (by the frontend)
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  labels:
+    {{- include "three-tier.labels" . | nindent 4 }}
+data:
+  DB_HOST: mysql          # = mysql headless Service name
+  DB_PORT: "3306"
+  DB_NAME: {{ .Values.mysql.database | quote }}
+  DB_USER: {{ .Values.mysql.user | quote }}
+---
+{{- if .Values.backend.rollout.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+{{- end }}
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.backend.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: backend
+  {{- if .Values.backend.rollout.enabled }}
+  strategy:
+    canary:
+      steps:
+        - setWeight: 25       # 1 of 4 Pods runs the new version
+        - pause: {}           # wait for a human: kubectl argo rollouts promote backend
+        - setWeight: 50
+        - pause: { duration: 60s }
+        # then 100%
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      serviceAccountName: backend
+      {{- include "three-tier.scheduling" . | nindent 6 }}
+      {{- include "three-tier.spread" (dict "app" "backend") | nindent 6 }}
+      {{- include "three-tier.podSecurity" (dict "uid" 1000) | nindent 6 }}
+      containers:
+        - name: backend
+          image: {{ include "three-tier.image" (dict "root" . "image" .Values.backend.image) }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+          envFrom:
+            - configMapRef:
+                name: backend-config
+          env:
+            - name: PORT
+              value: {{ .Values.backend.port | quote }}
+            - name: APP_VERSION       # shown in the UI → you can see which tag is live
+              value: {{ .Values.backend.image.tag | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+          {{- include "three-tier.containerSecurity" . | nindent 10 }}
+          readinessProbe:             # traffic only when the DB is reachable
+            httpGet: { path: /api/ready, port: http }
+            periodSeconds: 5
+          livenessProbe:              # restart only if the process is stuck
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: http

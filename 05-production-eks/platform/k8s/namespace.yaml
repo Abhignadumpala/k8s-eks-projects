@@ -1,0 +1,16 @@
+# ───────────────────────────────────────────────
+# The app's namespace (Step 03), with Pod Security Standards (Step 05):
+#   enforce: restricted → Pods that run as root, add capabilities,
+#                         or allow privilege escalation are REJECTED
+#   warn / audit        → also print a warning and write an audit event
+# Step 08 adds the label istio.io/dataplane-mode=ambient with kubectl.
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: three-tier
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

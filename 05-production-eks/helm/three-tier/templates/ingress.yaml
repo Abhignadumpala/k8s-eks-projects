@@ -1,0 +1,31 @@
+# ───────────────────────────────────────────────
+# Ingress → the AWS Load Balancer Controller creates an internet-facing ALB
+#   - in the PUBLIC subnets (tag kubernetes.io/role/elb = 1, Step 01)
+#   - target-type ip: the ALB sends traffic straight to the frontend Pod IPs
+# ───────────────────────────────────────────────
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+    {{- include "three-tier.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http
+{{- end }}

@@ -1,0 +1,90 @@
+# ───────────────────────────────────────────────
+# Default values for the three-tier chart (production layout).
+# Switches marked "Step NN" are turned on in that step.
+# Your AWS account ID is NEVER written here: the ECR registry is passed in
+# at install time (--set global.registry=...).
+# ───────────────────────────────────────────────
+
+global:
+  # <account-id>.dkr.ecr.us-east-1.amazonaws.com  (set with --set, never commit it)
+  registry: ""
+
+# Every app Pod runs on the "app" node group (label + toleration for the taint)
+scheduling:
+  nodeSelector:
+    role: app
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: app
+      effect: NoSchedule
+
+frontend:
+  image:
+    repository: prod-frontend
+    tag: v1
+  replicas: 2
+  port: 8080
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 200m, memory: 128Mi }
+
+backend:
+  image:
+    repository: prod-backend
+    tag: v1
+  replicas: 2
+  port: 8080
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  # Step 10: Argo Rollouts canary instead of a normal Deployment
+  rollout:
+    enabled: false
+
+mysql:
+  image: public.ecr.aws/docker/library/mysql:8.4
+  database: tasksdb
+  user: appuser
+  storage:
+    size: 5Gi
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: "1", memory: 1Gi }
+
+# The Kubernetes Secret "mysql-secret" (keys: password, root-password)
+#   Step 03: you create it by hand with kubectl (never in Git)
+#   Step 06: External Secrets creates it from AWS Secrets Manager
+externalSecret:
+  enabled: false
+  secretStore: aws-secrets-manager
+  remoteKey: abhigna-prod/three-tier/mysql
+  refreshInterval: 1h
+
+# Public entry point: the AWS Load Balancer Controller creates an ALB
+ingress:
+  enabled: true
+  className: alb
+
+# EKS has no default StorageClass: the chart creates an encrypted gp3 one
+storageClass:
+  create: true
+  name: gp3
+
+# Step 08: Istio ambient mesh rules (mTLS + who may talk to whom)
+mesh:
+  enabled: false
+  # Step 11: let Prometheus (in this namespace) scrape the backend
+  allowMonitoringNamespace: monitoring
+
+# Step 09: high availability
+autoscaling:
+  enabled: false          # needs metrics-server
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 60
+
+# Step 11: Prometheus scrapes backend /metrics
+metrics:
+  serviceMonitor:
+    enabled: false

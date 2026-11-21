@@ -1,0 +1,5 @@
+The 3-tier app is installed in namespace {{ .Release.Namespace }}.
+
+Pods:        kubectl get pods -n {{ .Release.Namespace }} -o wide
+App URL:     kubectl get ingress frontend -n {{ .Release.Namespace }}
+             (the ADDRESS column; the ALB needs 2-3 minutes)

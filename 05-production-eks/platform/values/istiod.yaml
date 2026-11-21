@@ -1,0 +1,10 @@
+# ───────────────────────────────────────────────
+# Step 08: Istio control plane (istiod), ambient mode
+# Smaller requests than the default (500m CPU / 2 GiB) so it fits the lab.
+# ───────────────────────────────────────────────
+profile: ambient
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi

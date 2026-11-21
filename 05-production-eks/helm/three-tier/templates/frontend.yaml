@@ -1,0 +1,69 @@
+# ───────────────────────────────────────────────
+# Tier 1 — frontend (nginx). Stateless → Deployment
+# Service type ClusterIP: the public entry point is the ALB (ingress.yaml)
+# ───────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.frontend.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      serviceAccountName: frontend
+      {{- include "three-tier.scheduling" . | nindent 6 }}
+      {{- include "three-tier.spread" (dict "app" "frontend") | nindent 6 }}
+      {{- include "three-tier.podSecurity" (dict "uid" 101) | nindent 6 }}
+      containers:
+        - name: frontend
+          image: {{ include "three-tier.image" (dict "root" . "image" .Values.frontend.image) }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.frontend.port }}
+          env:
+            - name: BACKEND_URL
+              value: "http://backend:{{ .Values.backend.port }}"
+          {{- include "three-tier.containerSecurity" . | nindent 10 }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          volumeMounts:
+            # read-only root filesystem: nginx still needs these 2 writable folders
+            - { name: tmp, mountPath: /tmp }
+            - { name: nginx-conf, mountPath: /etc/nginx/conf.d }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: nginx-conf, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+    {{- include "three-tier.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

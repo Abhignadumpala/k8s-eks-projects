@@ -1,0 +1,51 @@
+# ───────────────────────────────────────────────
+# Step 09: high availability
+#   PodDisruptionBudget → during node drains/upgrades, at most 1 Pod of each
+#                         app may be taken down at a time
+#   HorizontalPodAutoscaler → more Pods when CPU is high (needs metrics-server)
+# ───────────────────────────────────────────────
+{{- range $app := list "frontend" "backend" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $app }}
+  labels:
+    {{- include "three-tier.labels" $ | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: {{ $app }}
+{{- if $.Values.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $app }}
+  labels:
+    {{- include "three-tier.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef:
+    {{- if and (eq $app "backend") $.Values.backend.rollout.enabled }}
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    {{- else }}
+    apiVersion: apps/v1
+    kind: Deployment
+    {{- end }}
+    name: {{ $app }}
+  minReplicas: {{ $.Values.autoscaling.minReplicas }}
+  maxReplicas: {{ $.Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $.Values.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 120   # wait 2 min before removing Pods (no flapping)
+{{- end }}
+{{- end }}

@@ -1,0 +1,12 @@
+# ───────────────────────────────────────────────
+# Step 03: AWS Load Balancer Controller (creates ALBs for Ingress objects)
+# vpcId is passed with --set at install time: Pods can't read it from the
+# node (IMDS hop limit 1), so we tell the controller directly.
+# ───────────────────────────────────────────────
+clusterName: abhigna-prod
+region: us-east-1
+replicaCount: 2
+
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller   # matches the Pod Identity association (Terraform)

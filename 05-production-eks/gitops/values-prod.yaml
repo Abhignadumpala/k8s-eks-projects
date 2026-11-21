@@ -1,0 +1,31 @@
+# ───────────────────────────────────────────────
+# Production values for the three-tier chart, managed by Git (Step 10).
+#   - Argo CD deploys the chart with THIS file
+#   - GitHub Actions changes ONLY the two "tag:" lines on every build
+#   - every switch is ON: this is the final production setup
+# The ECR registry (with your account ID) is NOT here: it is set in the
+# Argo CD Application when you apply it on the bastion.
+# ───────────────────────────────────────────────
+
+frontend:
+  image:
+    tag: v1
+
+backend:
+  image:
+    tag: v1
+  rollout:
+    enabled: true          # Step 10: canary with Argo Rollouts
+
+externalSecret:
+  enabled: true            # Step 06: passwords from AWS Secrets Manager
+
+mesh:
+  enabled: true            # Step 08: Istio mTLS + allow-lists
+
+autoscaling:
+  enabled: true            # Step 09: HPA
+
+metrics:
+  serviceMonitor:
+    enabled: false         # Step 11: set to true with a Git commit

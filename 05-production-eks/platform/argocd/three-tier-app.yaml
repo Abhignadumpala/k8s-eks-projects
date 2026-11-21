@@ -1,0 +1,33 @@
+# ───────────────────────────────────────────────
+# Step 10: Argo CD Application
+#   "Watch 05-production-eks in Git, render the Helm chart with
+#    gitops/values-prod.yaml, and keep the cluster exactly like that."
+# ${ACCOUNT_ID} is filled in by envsubst when you apply it (not in Git).
+# ───────────────────────────────────────────────
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: three-tier
+  namespace: argocd                 # Applications always live in the argocd namespace
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Abhignadumpala/k8s-eks-projects.git
+    targetRevision: main
+    path: 05-production-eks/helm/three-tier
+    helm:
+      valueFiles:
+        - ../../gitops/values-prod.yaml
+      parameters:
+        - name: global.registry
+          value: ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+
+  destination:
+    server: https://kubernetes.default.svc   # the same cluster Argo CD runs in
+    namespace: three-tier
+
+  syncPolicy:
+    automated:
+      prune: true       # delete objects that were removed from Git
+      selfHeal: true    # undo manual kubectl changes (Git wins)

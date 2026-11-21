@@ -1,0 +1,25 @@
+# ───────────────────────────────────────────────
+# Step 07: no AWS access keys in Pod environment variables.
+# Pods get AWS access only through Pod Identity (temporary credentials).
+# ───────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: disallow-aws-access-keys
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: three-tier
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - expression: >-
+        object.spec.containers.all(c,
+          !has(c.env) || c.env.all(e,
+            e.name != 'AWS_ACCESS_KEY_ID' && e.name != 'AWS_SECRET_ACCESS_KEY'))
+      message: "AWS access keys in env vars are not allowed. Use EKS Pod Identity."

@@ -1,0 +1,32 @@
+# ───────────────────────────────────────────────
+# Step 09: load generator → makes the backend busy so HPA adds Pods
+# Lives in its own namespace (not the app's), runs on the system nodes.
+# Delete it when done:  kubectl delete -f loadtest.yaml
+# ───────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: loadtest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadtest
+  namespace: loadtest
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: loadtest
+  template:
+    metadata:
+      labels:
+        app: loadtest
+    spec:
+      containers:
+        - name: loadtest
+          image: public.ecr.aws/docker/library/busybox:1.37
+          command: ["sh", "-c", "while true; do wget -q -O- http://frontend.three-tier/api/tasks >/dev/null; done"]
+          resources:
+            requests: { cpu: 50m, memory: 16Mi }
+            limits:   { cpu: 200m, memory: 32Mi }

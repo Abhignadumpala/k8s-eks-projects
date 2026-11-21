@@ -1,0 +1,9 @@
+# ───────────────────────────────────────────────
+# Step 10: Argo CD
+# UI is reached with kubectl port-forward + an SSH tunnel (never public).
+# ───────────────────────────────────────────────
+dex:
+  enabled: false          # no SSO in this lab; we log in as admin
+
+notifications:
+  enabled: false

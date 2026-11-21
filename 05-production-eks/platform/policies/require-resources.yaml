@@ -1,0 +1,27 @@
+# ───────────────────────────────────────────────
+# Step 07: every container must say how much CPU/memory it needs (requests)
+# and the most memory it may use (limit). Without them, one Pod can
+# starve the others on the node, and HPA can't calculate CPU %.
+# ───────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-requests-limits
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: three-tier
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - expression: >-
+        object.spec.containers.all(c,
+          has(c.resources) && has(c.resources.requests) && has(c.resources.limits) &&
+          'cpu' in c.resources.requests && 'memory' in c.resources.requests &&
+          'memory' in c.resources.limits)
+      message: "Every container needs resources.requests (cpu, memory) and resources.limits.memory."

@@ -1,0 +1,47 @@
+# ───────────────────────────────────────────────
+# Step 04: least-privilege access for people
+#   group "dev-readonly"  → can only LOOK at the app namespace (built-in "view")
+#   group "dev-debug"     → can also read logs and port-forward, nothing else
+# The group name comes from the login (EKS access entry), like bastion-admin
+# in Step 01. Nothing here gives cluster-wide power.
+# ───────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dev-readonly-view
+  namespace: three-tier
+subjects:
+  - kind: Group
+    name: dev-readonly
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: view                 # built-in: read most objects, NOT Secrets
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-debugger
+  namespace: three-tier
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dev-debug-pod-debugger
+  namespace: three-tier
+subjects:
+  - kind: Group
+    name: dev-debug
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: pod-debugger
+  apiGroup: rbac.authorization.k8s.io

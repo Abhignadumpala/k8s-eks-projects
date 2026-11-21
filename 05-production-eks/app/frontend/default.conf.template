@@ -1,0 +1,26 @@
+# ───────────────────────────────────────────────
+# nginx config (template). At container start, nginx replaces ${BACKEND_URL}
+# with the env var value and writes /etc/nginx/conf.d/default.conf
+# ───────────────────────────────────────────────
+server {
+    listen 8080;
+
+    # Tier 1: static files
+    location / {
+        root  /usr/share/nginx/html;
+        index index.html;
+    }
+
+    # Tier 1 → Tier 2: forward API calls to the backend Service
+    location /api/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Used by Kubernetes probes and the load balancer health check
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+    }
+}
