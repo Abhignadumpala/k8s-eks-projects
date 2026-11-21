@@ -951,6 +951,12 @@ module "eks" {
     }
     aws-ebs-csi-driver = {
       most_recent = true # creates EBS disks for PVCs (MySQL)
+      # Its controller Pod gets AWS permissions through Pod Identity.
+      # It can't use the node's role: IMDS hop limit 1 blocks Pods from it.
+      pod_identity_association = [{
+        role_arn        = aws_iam_role.ebs_csi.arn
+        service_account = "ebs-csi-controller-sa"
+      }]
     }
   }
 
@@ -969,7 +975,6 @@ module "eks" {
     # Only what's needed on top of the module's defaults (worker, CNI, ECR read-only)
     iam_role_additional_policies = {
       AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-      AmazonEBSCSIDriverPolicy     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
     }
   }
 
@@ -1018,8 +1023,23 @@ module "eks" {
   }
 }
 
+# EBS CSI driver's own IAM role (Pod Identity), used by the add-on above
+resource "aws_iam_role" "ebs_csi" {
+  name               = "${var.cluster_name}-ebs-csi"
+  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 # Inside Kubernetes: group "bastion-admin" gets the built-in cluster-admin role
 resource "kubernetes_cluster_role_binding" "bastion_admin" {
+  # Wait until the whole cluster is ready, including YOUR admin access.
+  # Without this, Terraform may try before EKS has made you admin → "forbidden".
+  depends_on = [module.eks]
+
   metadata {
     name = "${var.cluster_name}-bastion-admin"
   }
@@ -1053,19 +1073,21 @@ resource "kubernetes_cluster_role_binding" "bastion_admin" {
 | `eks-pod-identity-agent` | Runs on every node and hands out **temporary** AWS credentials to Pods |
 | `before_compute = true` | Installed **before** the nodes start, so every node has it from minute one |
 | `aws-ebs-csi-driver` | Creates an EBS disk when a Pod asks for storage. MySQL needs it to save data |
+| `pod_identity_association` | Gives the EBS CSI controller (ServiceAccount `ebs-csi-controller-sa`) its **own** IAM role through Pod Identity. It can't borrow the node's role, because hop limit 1 blocks Pods from IMDS |
 | `eks_managed_node_group_defaults` | Settings shared by **both** node groups, written once |
 | `ami_type = "AL2023_x86_64_STANDARD"` | The nodes' operating system: Amazon Linux 2023 |
 | `instance_types = var.node_instance_types` | Machine size: `m7i-flex.large` (2 vCPU, 8 GB RAM) |
 | `http_tokens = "required"` | IMDSv2 only (needs a session token; safer than v1) |
 | `http_put_response_hop_limit = 1` | The metadata answer can't reach Pods (see *What is IMDS*) |
 | `AmazonSSMManagedInstanceCore` | Log in to a node through AWS SSM, without SSH keys |
-| `AmazonEBSCSIDriverPolicy` | Permission to create EBS disks. *On the node role for now; Step 05 moves it to Pod Identity* |
 | `system = { ... }` | Node group for cluster tools. Size from `var.system_nodes` (2 → 4) |
 | `labels = { role = "system" }` | Puts the label `role=system` on these nodes |
 | `app = { ... }` | Node group for the application. Size from `var.app_nodes` (2 → 4) |
 | `taints = { ... NO_SCHEDULE }` | Puts `workload=app:NoSchedule` on app nodes: no Pod lands there without a matching toleration |
 | `cluster_security_group_additional_rules` | Firewall rule: the bastion may call the API server on port **443** |
+| `aws_iam_role.ebs_csi` + `AmazonEBSCSIDriverPolicy` | The EBS CSI driver's own role: permission to create, attach and delete EBS disks. Trusts `pods.eks.amazonaws.com` (Pod Identity) |
 | `resource "kubernetes_cluster_role_binding" "bastion_admin"` | Inside Kubernetes: gives the group `bastion-admin` the built-in `cluster-admin` role |
+| `depends_on = [module.eks]` | Create the binding only **after** the whole cluster is finished, including your own admin access. Otherwise it can fail with `forbidden` |
 
 How the bastion gets access, in 2 parts:
 
@@ -1831,8 +1853,8 @@ terraform plan
 | Group | Count | What gets created | File |
 |---|---|---|---|
 | 🌐 **Network** | 23 | 1 VPC · 6 subnets (3 public, 3 private) · 1 internet gateway · 1 NAT gateway + 1 Elastic IP · 2 route tables + 2 routes + 6 route-table links · 3 VPC defaults (locked down) | `vpc.tf` |
-| ☸️ **EKS cluster** | 32 | 1 cluster · 1 log group (audit logs) · 1 KMS key + 1 alias (encrypts Secrets) · 1 cluster IAM role + 2 policies + 4 policy attachments · 1 OIDC provider · 2 security groups (cluster, nodes) + 12 rules · 2 access entries (you, bastion) + 1 admin link · 2 add-ons (Pod Identity agent, EBS CSI) · 1 wait timer | `eks.tf` |
-| 🖥️ **Node groups** | 18 | Per group (system, app) **×2**: 1 node group · 1 launch template (IMDS hop 1, encrypted disk) · 1 IAM role + 5 policy attachments (worker, CNI, ECR read, EBS, SSM) · 1 CIDR check | `eks.tf` |
+| ☸️ **EKS cluster** | 34 | 1 cluster · 1 log group (audit logs) · 1 KMS key + 1 alias (encrypts Secrets) · 1 cluster IAM role + 2 policies + 4 policy attachments · 1 OIDC provider · 2 security groups (cluster, nodes) + 12 rules · 2 access entries (you, bastion) + 1 admin link · 2 add-ons (Pod Identity agent, EBS CSI) + 1 EBS CSI IAM role + 1 attachment · 1 wait timer | `eks.tf` |
+| 🖥️ **Node groups** | 16 | Per group (system, app) **×2**: 1 node group · 1 launch template (IMDS hop 1, encrypted disk) · 1 IAM role + 4 policy attachments (worker, CNI, ECR read, SSM) · 1 CIDR check | `eks.tf` |
 | 🔑 **Bastion** | 7 | 1 EC2 instance · 1 security group (SSH from your IP) · 1 IAM role + 1 inline policy + 1 attachment (ECR read) + 1 instance profile · 1 ClusterRoleBinding (`bastion-admin` → cluster-admin) | `bastion.tf`, `eks.tf` |
 | 📦 **ECR** | 2 | `prod-frontend`, `prod-backend` repositories | `ecr.tf` |
 | **Total** | **82** | | |
@@ -1939,6 +1961,8 @@ terraform destroy
 | `ssh: Connection timed out` | Your IP isn't allowed in `ssh_allowed_cidr` | Put your current IP from `curl -s ifconfig.me`, then `terraform apply` again |
 | `kubectl: command not found` on the bastion | Setup script still running | Wait 2–3 minutes and log in again. Log: `sudo tail -50 /var/log/bastion-bootstrap.log` |
 | `No configuration files` | You're in the wrong folder | `cd ~/k8s-eks-projects/05-production-eks/terraform` |
+| `aws-ebs-csi-driver` add-on: `timeout while waiting for state to become 'ACTIVE' (last state: 'CREATING')` | The EBS CSI controller Pod had no AWS permissions. It tried to use the node's IAM role, but IMDS hop limit 1 blocks Pods from it (that's the point of hop limit 1). *This happened in the real run; the code is fixed now* | The add-on gets its own IAM role through Pod Identity (`pod_identity_association` in `eks.tf`). Run `terraform apply` again: Terraform replaces the stuck add-on |
+| `clusterrolebindings ... is forbidden: User ... cannot create resource "clusterrolebindings"` | Terraform tried to create the bastion's ClusterRoleBinding **before** EKS finished making you cluster admin (a race). *Also happened in the real run; fixed* | `depends_on = [module.eks]` on the binding makes it wait. Run `terraform apply` again |
 
 ## Cost
 

@@ -43,6 +43,12 @@ module "eks" {
     }
     aws-ebs-csi-driver = {
       most_recent = true # creates EBS disks for PVCs (MySQL)
+      # Its controller Pod gets AWS permissions through Pod Identity.
+      # It can't use the node's role: IMDS hop limit 1 blocks Pods from it.
+      pod_identity_association = [{
+        role_arn        = aws_iam_role.ebs_csi.arn
+        service_account = "ebs-csi-controller-sa"
+      }]
     }
   }
 
@@ -61,7 +67,6 @@ module "eks" {
     # Only what's needed on top of the module's defaults (worker, CNI, ECR read-only)
     iam_role_additional_policies = {
       AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-      AmazonEBSCSIDriverPolicy     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
     }
   }
 
@@ -110,8 +115,23 @@ module "eks" {
   }
 }
 
+# EBS CSI driver's own IAM role (Pod Identity), used by the add-on above
+resource "aws_iam_role" "ebs_csi" {
+  name               = "${var.cluster_name}-ebs-csi"
+  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 # Inside Kubernetes: group "bastion-admin" gets the built-in cluster-admin role
 resource "kubernetes_cluster_role_binding" "bastion_admin" {
+  # Wait until the whole cluster is ready, including YOUR admin access.
+  # Without this, Terraform may try before EKS has made you admin → "forbidden".
+  depends_on = [module.eks]
+
   metadata {
     name = "${var.cluster_name}-bastion-admin"
   }
