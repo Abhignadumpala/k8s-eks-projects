@@ -1916,17 +1916,6 @@ kubectl get pods -n kube-system
 
 > ✅ `eks-pod-identity-agent-...` and `ebs-csi-...` Pods are `Running`.
 
-> **Did we create `kube-system`? No.** Every Kubernetes cluster starts with 4 namespaces, made by Kubernetes itself:
->
-> | Namespace | What's in it |
-> |---|---|
-> | `default` | Empty. Where things go if you don't name a namespace |
-> | `kube-system` | The cluster's own system Pods: `aws-node` (VPC CNI), `coredns`, `kube-proxy`, plus the add-ons we asked for (`ebs-csi-*`, `eks-pod-identity-agent`) |
-> | `kube-public` | Almost empty; readable by everyone |
-> | `kube-node-lease` | Heartbeats from each node ("I'm alive") |
->
-> See them: `kubectl get ns`. **No app Pods yet**: Step 01 builds only the platform. The app comes in Step 03, in its own namespace `three-tier`. `kubectl get pods -A` (all namespaces) shows only system Pods for now.
-
 ```bash
 aws ecr describe-repositories --region us-east-1 --query 'repositories[].repositoryName' --output text
 ```
