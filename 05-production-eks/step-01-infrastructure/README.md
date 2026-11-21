@@ -1826,6 +1826,23 @@ terraform plan
 > | `github_ci_role_arn = ""`, `karpenter_queue_name = ""`, `mysql_secret_name = ""`... | Empty on purpose: their switches in `terraform.tfvars` are still `false`. They fill in when you turn them on in Steps 06–10 |
 > | `Note: You didn't use the -out option...` | Safe to ignore in a lab. `apply` makes a fresh plan and shows it again before you type `yes`. In teams/CI you'd save it (`terraform plan -out=tfplan`, then `terraform apply tfplan`) so exactly the reviewed plan is applied |
 
+#### What the 82 resources are
+
+| Group | Count | What gets created | File |
+|---|---|---|---|
+| 🌐 **Network** | 23 | 1 VPC · 6 subnets (3 public, 3 private) · 1 internet gateway · 1 NAT gateway + 1 Elastic IP · 2 route tables + 2 routes + 6 route-table links · 3 VPC defaults (locked down) | `vpc.tf` |
+| ☸️ **EKS cluster** | 32 | 1 cluster · 1 log group (audit logs) · 1 KMS key + 1 alias (encrypts Secrets) · 1 cluster IAM role + 2 policies + 4 policy attachments · 1 OIDC provider · 2 security groups (cluster, nodes) + 12 rules · 2 access entries (you, bastion) + 1 admin link · 2 add-ons (Pod Identity agent, EBS CSI) · 1 wait timer | `eks.tf` |
+| 🖥️ **Node groups** | 18 | Per group (system, app) **×2**: 1 node group · 1 launch template (IMDS hop 1, encrypted disk) · 1 IAM role + 5 policy attachments (worker, CNI, ECR read, EBS, SSM) · 1 CIDR check | `eks.tf` |
+| 🔑 **Bastion** | 7 | 1 EC2 instance · 1 security group (SSH from your IP) · 1 IAM role + 1 inline policy + 1 attachment (ECR read) + 1 instance profile · 1 ClusterRoleBinding (`bastion-admin` → cluster-admin) | `bastion.tf`, `eks.tf` |
+| 📦 **ECR** | 2 | `prod-frontend`, `prod-backend` repositories | `ecr.tf` |
+| **Total** | **82** | | |
+
+> **Not in the 82:** CoreDNS, kube-proxy and the VPC CNI. EKS installs them **automatically** with every cluster, so Terraform doesn't create them.
+>
+> 💡 **Why so many?** One "thing" in the console is often several Terraform resources. A security group and each of its rules are separate resources, and so are an IAM role and each policy attached to it. This lets Terraform change one rule without rebuilding the whole group.
+>
+> See the full list yourself: `terraform state list` (after apply), or `terraform plan | grep "will be created"` (before).
+
 ```bash
 terraform apply
 ```
