@@ -1884,7 +1884,7 @@ terraform destroy
 
 | Error | Why it happens | Fix |
 |---|---|---|
-| `connection reset by peer` during `terraform init` | The download was cut off. Often an IPv6 network problem | Run `terraform init` again. If it keeps failing, try another network (e.g. phone hotspot) |
+| `connection reset by peer` during `terraform init` | The download was cut off. Often an IPv6 network problem: the connection to HashiCorp's servers drops randomly, so some providers download and some don't | Run `terraform init` again (2–3 times is normal). Each run **keeps** the providers already downloaded (plugin cache) and only retries the failed ones, so every run gets closer. Still failing? Try another network (e.g. phone hotspot) |
 | `InvalidKeyPair.NotFound` | `key_pair_name` doesn't exist in us-east-1 | Do Task 1, or fix `key_pair_name` in `terraform.tfvars` |
 | `Unsupported Kubernetes version` | That version isn't offered any more | Pick a `STANDARD_SUPPORT` version: `aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text` |
 | `VcpuLimitExceeded` | Your account's vCPU quota is too low for 5 machines | Request a quota increase in *Service Quotas*, or lower `desired`/`min` in `terraform.tfvars` |
