@@ -1774,9 +1774,31 @@ terraform init
 terraform fmt
 ```
 
+> **fmt = format.** It fixes the **look** of the code: spacing, indentation, lining up the `=` signs. It changes the files itself, then prints the names of the files it changed. **No output = everything was already tidy.** It does not check whether the code is correct.
+
 ```bash
 terraform validate
 ```
+
+> **validate = check the code is correct**, without talking to AWS. It catches mistakes like these:
+
+| validate catches | Example |
+|---|---|
+| Spelling / syntax errors | a missing `}` or `"` |
+| Unknown arguments | `instanse_type` instead of `instance_type` |
+| Wrong value types | text where a number is expected |
+| Broken references | `module.vpc.privte_subnets` (no such output) |
+| Missing required settings | a resource without a setting it needs |
+
+> It does **not** catch AWS problems: a wrong key pair name, an EKS version AWS doesn't offer, or a quota that's too low. Those show up only at `plan` / `apply`, when Terraform talks to AWS.
+
+| Command | Checks | Talks to AWS? | Changes files? |
+|---|---|---|---|
+| `terraform fmt` | How the code **looks** | No | Yes (spacing only) |
+| `terraform validate` | Whether the code is **correct** | No | No |
+| `terraform plan` | What would change in **AWS** | Yes (reads only) | No |
+
+> 💡 Interview one-liner: *"fmt formats, validate checks syntax and references offline, plan compares the code with real AWS."* In CI, use `terraform fmt -check` to fail the pipeline when code isn't formatted.
 
 ✅ **Check:** `validate` prints **Success! The configuration is valid.**
 
