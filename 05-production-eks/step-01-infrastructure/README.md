@@ -1818,6 +1818,14 @@ terraform plan
 
 > A **preview only**. Scroll through it: you should see the VPC and subnets, `aws_eks_cluster`, node groups `["system"]` and `["app"]`, the add-ons `eks-pod-identity-agent` and `aws-ebs-csi-driver`, 2 `aws_ecr_repository` and `aws_instance.bastion`. The last line: **`Plan: 82 to add, 0 to change, 0 to destroy.`**
 
+> **Reading the end of the plan:**
+>
+> | You see | Means |
+> |---|---|
+> | `(known after apply)` | AWS creates that value (an IP, an ID), so Terraform can't know it yet |
+> | `github_ci_role_arn = ""`, `karpenter_queue_name = ""`, `mysql_secret_name = ""`... | Empty on purpose: their switches in `terraform.tfvars` are still `false`. They fill in when you turn them on in Steps 06–10 |
+> | `Note: You didn't use the -out option...` | Safe to ignore in a lab. `apply` makes a fresh plan and shows it again before you type `yes`. In teams/CI you'd save it (`terraform plan -out=tfplan`, then `terraform apply tfplan`) so exactly the reviewed plan is applied |
+
 ```bash
 terraform apply
 ```
