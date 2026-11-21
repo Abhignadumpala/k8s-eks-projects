@@ -1066,6 +1066,16 @@ When you run `kubectl` on the bastion:
 
 **Analogy 🏷️:** reception (access entry) writes "bastion-admin" on your name tag; the door guard (binding) has a list "bastion-admin → all doors".
 
+**So who "created" it? You did, by writing the name in Terraform.** You choose any name; `terraform apply` stores it in EKS (access entry) and in Kubernetes (binding). Kubernetes does not manage users or groups: it **trusts the login system** (here EKS) to say "this caller is in group X", and only decides what group X may do.
+
+| | Real group object? | Who manages members? |
+|---|---|---|
+| Entra ID / AD group | ✅ Yes | Entra ID / AD |
+| AWS IAM group | ✅ Yes | IAM |
+| **Kubernetes group** | ❌ No, just a name | The login system (EKS access entries, or Entra ID / Okta via OIDC) |
+
+> 💡 In companies, Kubernetes groups often come **from Entra ID**: login says "user is in Entra group `k8s-admins`", and a RoleBinding gives `k8s-admins` its permissions.
+
 > ⚠️ The spelling must match **exactly**. `bastion-admin` vs `bastion-admins` → login works, but every command fails with **`Forbidden`**.
 
 > 🎯 **Interview one-liner:** "Kubernetes groups aren't objects, they're strings. The EKS access entry assigns the group name to an IAM role, and a RoleBinding or ClusterRoleBinding grants permissions to that same name."
