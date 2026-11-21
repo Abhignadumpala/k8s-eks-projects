@@ -125,6 +125,24 @@ A simple practice cluster **works**, but it isn't how companies run Kubernetes. 
 | **Taint** | A "keep out" rule on a node. Pods are refused unless they have a matching **toleration** |
 | **Toleration** | A "pass" in the Pod's YAML that lets it ignore a taint |
 
+#### The tools on the system nodes, in one line each
+
+| Tool | What it does | Why we install it | Step |
+|---|---|---|---|
+| **CoreDNS** | The cluster's phone book: turns names like `backend` into Pod IPs | Without it, services can't find each other by name | 01 (comes with EKS) |
+| **EBS CSI driver** | Creates and attaches EBS disks for PVCs | MySQL needs a disk that survives Pod restarts | 01 |
+| **AWS Load Balancer Controller** | Turns an Ingress into a real AWS ALB | So users on the internet can reach the app | 03 |
+| **External Secrets** | Copies passwords from AWS Secrets Manager into Kubernetes Secrets | No passwords in Git or YAML | 06 |
+| **Kyverno** | Checks every new Pod against our rules (registry, tag, limits, signature) | Blocks unsafe or untrusted workloads automatically | 07 |
+| **Istio (istiod)** | Gives every service an identity and certificates for mTLS | Encrypted traffic, only allowed paths (frontend → backend → db) | 08 |
+| **metrics-server** | Collects live CPU/memory of Pods and nodes | HPA needs it to scale Pods | 09 |
+| **Karpenter** | Adds and removes EC2 nodes when Pods don't fit | Automatic node scaling, Spot to save money | 09 |
+| **Argo CD** | Keeps the cluster the same as Git (GitOps) | Deploys by `git push`, undoes manual changes | 10 |
+| **Argo Rollouts** | Releases new versions step by step (canary) | A bad release hits only a few users first | 10 |
+| **Prometheus + Grafana** | Collects metrics, shows dashboards, fires alerts | See problems and get told before users complain | 11 |
+
+> None of these need a special setting to land on system nodes: the app nodes are tainted, so anything without the toleration goes to the system nodes automatically.
+
 **Nodes** are the EC2 machines where Pods run. In production we split them into two groups, each with its own job.
 
 | | **System nodes** | **App nodes** |
