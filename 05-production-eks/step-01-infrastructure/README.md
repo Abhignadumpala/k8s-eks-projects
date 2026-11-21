@@ -1046,6 +1046,30 @@ bastion EC2 ──IAM role──► access entry (AWS side: "you may log in, gro
 
 > **AuthN vs AuthZ:** the access entry answers *"who are you?"* (authentication). The ClusterRoleBinding answers *"what can you do?"* (authorization, RBAC).
 
+#### Where is the group `bastion-admin` created?
+
+**Nowhere.** In Kubernetes, **groups are just names (text)**. There is no `kind: Group` object and no `kubectl get groups`. A group "exists" only because **two places use the same name**:
+
+| Place | Code | Job |
+|---|---|---|
+| **Access entry** (top of `eks.tf`) | `kubernetes_groups = ["bastion-admin"]` | **Gives** the name to the bastion's IAM role (AuthN) |
+| **ClusterRoleBinding** (bottom of `eks.tf`) | `subject { kind = "Group", name = "bastion-admin" }` | Gives **power** to that name (AuthZ) |
+
+When you run `kubectl` on the bastion:
+
+```
+1. kubectl sends a request signed with the bastion's IAM role
+2. EKS access entry: "this IAM role → group bastion-admin"   (AuthN)
+3. RBAC binding:     "group bastion-admin → cluster-admin"   (AuthZ)
+4. ✅ allowed
+```
+
+**Analogy 🏷️:** reception (access entry) writes "bastion-admin" on your name tag; the door guard (binding) has a list "bastion-admin → all doors".
+
+> ⚠️ The spelling must match **exactly**. `bastion-admin` vs `bastion-admins` → login works, but every command fails with **`Forbidden`**.
+
+> 🎯 **Interview one-liner:** "Kubernetes groups aren't objects, they're strings. The EKS access entry assigns the group name to an IAM role, and a RoleBinding or ClusterRoleBinding grants permissions to that same name."
+
 #### Why only a ClusterRoleBinding, and no ClusterRole?
 
 Because **`cluster-admin` already exists**. Kubernetes ships with built-in ClusterRoles, so we only **bind** to one.
