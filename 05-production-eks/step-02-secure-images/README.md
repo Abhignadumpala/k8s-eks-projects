@@ -92,6 +92,29 @@ cosign generate-key-pair
 
 > Production teams often use **keyless** signing (GitHub's identity + Sigstore) or a key in **AWS KMS**, so no key file exists at all. We use a key file because it is the easiest way to see how signing works.
 
+### Does "signed" mean "scanned and safe"?
+
+**No, not by itself.** Scanning and signing answer **different questions**:
+
+| | Trivy scan | Cosign signature |
+|---|---|---|
+| Question it answers | *Does this image have known vulnerabilities?* | *Who made this image, and has it been changed since?* |
+| Proves | No HIGH/CRITICAL CVEs with a fix, **today** | It came from **us** (our private key) and is **byte-for-byte unchanged** |
+| Analogy | A health check-up 🩺 | A sealed envelope with your signature ✉️ |
+
+A signature alone says nothing about vulnerabilities. Anyone with the key could sign a bad image.
+
+**The link between them is the order we do things in:**
+
+```
+build ──► scan ──► ❌ fails? stop, never signed
+                └─► ✅ passes ──► push ──► sign
+```
+
+We **only sign images that passed the scan**. So in our setup, a signature means: *"this exact image was built by us and passed our checks."* When Kyverno (Step 07) allows only signed images, it blocks anything that **skipped** our pipeline: an image someone pushed by hand, or one that was tampered with.
+
+> ⚠️ A signed image can still become vulnerable later, when a new CVE is found next month. That's why ECR keeps scanning stored images, and why we rebuild regularly.
+
 ## 1.2 The code, file by file
 
 All app code is in [`../app`](../app).
@@ -494,3 +517,6 @@ Key-based uses a key pair you manage. Keyless uses a short-lived certificate tie
 
 **Q6. How do you keep images small and safe?**
 Small base (Alpine/distroless), production dependencies only, a non-root user, cache-friendly layer order, and regular rebuilds to pick up patched base images.
+
+**Q7. Does a signed image mean it has no vulnerabilities?**
+No. A signature proves **who** built the image and that it is **unchanged**; a scan checks for **vulnerabilities**. They become linked only because the pipeline signs **after** the scan passes, so "signed" means "passed our pipeline". New CVEs can still appear later, so registries keep rescanning.
