@@ -1046,6 +1046,38 @@ bastion EC2 ──IAM role──► access entry (AWS side: "you may log in, gro
 
 > **AuthN vs AuthZ:** the access entry answers *"who are you?"* (authentication). The ClusterRoleBinding answers *"what can you do?"* (authorization, RBAC).
 
+#### Why only a ClusterRoleBinding, and no ClusterRole?
+
+Because **`cluster-admin` already exists**. Kubernetes ships with built-in ClusterRoles, so we only **bind** to one.
+
+| Built-in ClusterRole | Allows |
+|---|---|
+| **`cluster-admin`** | **Everything**, everywhere (superuser) |
+| `admin` | Full control inside a namespace, including RBAC there |
+| `edit` | Create, change, delete most things in a namespace (no RBAC) |
+| `view` | Read-only (no Secrets) |
+
+```bash
+kubectl get clusterroles | grep -E "^(cluster-admin|admin|edit|view) "
+```
+
+**Rule:** a built-in role fits → **just bind it**. You need custom permissions (e.g. "only read Pods and logs") → **create your own ClusterRole, then bind it**.
+
+**Analogy 🔑:** the "master key" design already exists. We don't design a new key, we hand that one to the `bastion-admin` group.
+
+#### What scope does the bastion get?
+
+`cluster-admin` + **Cluster**RoleBinding = **all namespaces** (existing and future), **all resources** (Pods, Secrets, Nodes, RBAC, CRDs), **all actions**.
+
+| Binding | Scope |
+|---|---|
+| **RoleBinding** | Only **one namespace** |
+| **ClusterRoleBinding** | **Whole cluster**, all namespaces |
+
+> ⚠️ Fine for this lab: the bastion is the admin machine and must install Argo CD, Kyverno, Istio. In real production, `cluster-admin` is only for a small platform team (with MFA and audit logs); developers get `view` or `edit` in **their own namespace** through a RoleBinding. You build that in **Step 03 (RBAC)**.
+
+> 🎯 **Interview one-liner:** "cluster-admin is a built-in ClusterRole, so I only create a ClusterRoleBinding to my group. The access entry maps the bastion's IAM role to that group: AuthN in AWS, AuthZ in Kubernetes. In production I limit cluster-admin to the platform team and give developers namespace-scoped roles."
+
 ---
 
 ### `bastion.tf`: the jump box
