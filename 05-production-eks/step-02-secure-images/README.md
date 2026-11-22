@@ -360,16 +360,18 @@ export ECR=$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
 | `$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com` | Your ECR **registry** address (Step 01: one registry, many repositories) |
 
 ```bash
-docker build -t $ECR/prod-backend:v1 ./backend
+docker build --provenance=false -t $ECR/prod-backend:v1 ./backend
 ```
 
 ```bash
-docker build -t $ECR/prod-frontend:v1 ./frontend
+docker build --pull --provenance=false -t $ECR/prod-frontend:v1 ./frontend
 ```
 
 | Part | Meaning |
 |---|---|
 | `docker build` | Build an image by following the `Dockerfile` |
+| `--provenance=false` | Don't attach Docker's build-info attestation. Without it, `v1` becomes an **image index** (a list) that ECR can't scan by tag (`ScanNotFoundException`) |
+| `--pull` | Always download the newest base image first, to get its security fixes |
 | `-t $ECR/prod-backend:v1` | The image's name (**tag**): `<registry>/<repository>:<version>`. Naming it with the ECR address now means `docker push` knows where it goes |
 | `./backend` | The **build context**: the folder whose files the Dockerfile can copy (and where it finds the `Dockerfile`) |
 
@@ -468,7 +470,9 @@ aws ecr describe-image-scan-findings --repository-name prod-backend --image-id i
 
 > Reads ECR's own scan result for `prod-backend:v1` and shows only the count per severity.
 
-> ✅ `{}` or only LOW/MEDIUM counts. That's the **second** scan, done by AWS.
+> ✅ `{}` or only LOW/MEDIUM counts. That's the **second** scan, done by AWS. (No output at all = also clean: no findings.)
+
+> 🧪 **Real run (22 Nov 2026):** ECR found **1 CRITICAL + 4 HIGH** (zlib, openssl) in the backend that Trivy had passed. Same CVEs, but Trivy uses **Alpine's** rating (LOW/MEDIUM) and ECR uses **NVD's** (HIGH/CRITICAL). Fixes existed, so we added `RUN apk upgrade --no-cache` to the backend Dockerfile, deleted the repos (`terraform destroy -target=aws_ecr_repository.app` → `apply -target`), rebuilt, pushed again → ECR `{}` for both. Two scanners catch more than one.
 
 > 💡 **Immutable tags:** if you ever push a *different* image as `v1`, ECR refuses with `tag invalid: The image tag 'v1' already exists ... cannot be overwritten because the repository is immutable`. Every new build needs a new tag (`v2`, or the commit SHA in Step 10).
 
@@ -586,6 +590,8 @@ cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend@$BACKEND_DIGEST > /de
 | `name unknown: The repository with name 'prod-backend' does not exist` | Step 01 infrastructure is destroyed | `terraform apply` (Step 01) |
 | `tag invalid ... already exists` | IMMUTABLE tags: `v1` is taken by a different image | Use a new tag: `v2` |
 | Trivy `exit code 1` | HIGH/CRITICAL CVE with a fix | `docker pull` the newer base image, rebuild (Task 4) |
+| `ScanNotFoundException` on `describe-image-scan-findings` | `v1` is an image index (built without `--provenance=false`) | Rebuild with `--provenance=false`; or look up the scan by the inner image's digest |
+| ECR shows HIGH/CRITICAL that Trivy passed | Scanners use different severity sources (Alpine vs NVD) | Patch anyway if a fix exists: `apk upgrade --no-cache` in the Dockerfile |
 | Trivy finds CVEs under `usr/local/lib/node_modules/npm/...` | They are in **npm**, which ships inside the Node base image | Delete npm/npx/yarn/corepack after `npm ci` (see `app/backend/Dockerfile`): the app runs with `node` only |
 | Newest base image still has a CVE in nginx | That nginx version isn't released in the stable tag yet | Use a newer line (`1.31-alpine` mainline) and `apk upgrade --no-cache` |
 | `cosign: ... UNAUTHORIZED` | Cosign uses Docker's login | Repeat the `docker login` (Task 6) |
@@ -631,7 +637,7 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 | 3 | Ran the app locally with `docker compose` (frontend + backend + MySQL), saved a task in MySQL | ✅ 22 Nov |
 | 4 | Build `prod-backend:v1` + `prod-frontend:v1` | ✅ 22 Nov |
 | 5 | Trivy scan: **failed first** (backend 6 HIGH, frontend 5 CRITICAL + 15 HIGH) → fixed the Dockerfiles → both **0** | ✅ 22 Nov |
-| 6 | `docker login` to ECR + push | ⏳ |
+| 6 | `docker login` to ECR + push. ECR scan **failed first** (backend 1 CRITICAL + 4 HIGH that Trivy rated low) → `apk upgrade` + re-push → both **0** | ✅ 22 Nov |
 | 7 | `cosign generate-key-pair` → `~/.cosign` (outside the repo) | ⏳ |
 | 8 | `cosign sign` the digest + `cosign verify` | ⏳ |
 
@@ -660,4 +666,6 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 | No `docker.service` to restart | `sudo snap restart docker` |
 | Laptop froze on the first `docker compose up --build` | Hard reboot; worked fine after |
 | Trivy: backend **6 HIGH** in `brace-expansion` + `undici`, inside **npm itself** (`/usr/local/lib/node_modules/npm`), not in my app | npm is only needed to **install**, not to run → `RUN rm -rf` npm/npx/yarn/corepack after `npm ci` → **0** |
+| ECR scan: `ScanNotFoundException` for `imageTag=v1` | Docker 29 pushed `v1` as an **image index** + attestation; ECR scans only the real image inside | Build with `--provenance=false` → `v1` is a plain image, scan by tag works |
+| ECR scan: backend **1 CRITICAL + 4 HIGH** (zlib, openssl) but Trivy said 0 | Same CVEs, different rating: Trivy uses Alpine's (LOW/MEDIUM), ECR uses NVD's | `RUN apk upgrade --no-cache` in the backend → zlib 1.4-r0, openssl 3.5.9-r1 → ECR `{}` |
 | Trivy: frontend **5 CRITICAL + 15 HIGH** (nginx, curl, brotli). Newest `1.30-alpine` still had nginx 1.30.6 (fix needs 1.30.7) | Switched to nginx mainline `1.31-alpine` + `RUN apk upgrade --no-cache` (as root, then back to `USER 101`) → **0** |

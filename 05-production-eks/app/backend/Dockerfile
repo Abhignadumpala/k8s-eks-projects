@@ -6,6 +6,9 @@
 # ───────────────────────────────────────────────
 FROM node:24-alpine
 
+# Get the latest Alpine security fixes (openssl, zlib...)
+RUN apk upgrade --no-cache
+
 WORKDIR /app
 
 # Copy only the package files first → this layer is cached until dependencies change
