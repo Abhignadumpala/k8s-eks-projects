@@ -546,6 +546,14 @@ echo $BACKEND_DIGEST $FRONTEND_DIGEST
 
 > ✅ Two values starting with `sha256:`.
 
+Log cosign in to ECR (needed with **snap** Docker, harmless otherwise):
+
+```bash
+aws ecr get-login-password --region us-east-1 | cosign login --username AWS --password-stdin $ECR
+```
+
+> Cosign normally reuses Docker's login from `~/.docker/config.json`. Snap Docker saves it in `~/snap/docker/current/.docker/config.json`, so cosign gets `401 Unauthorized` without this.
+
 Sign (it asks for your key password):
 
 ```bash
@@ -579,6 +587,8 @@ cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend@$BACKEND_DIGEST > /de
 
 🎉 **Step 02 is done.** Two scanned, signed images are in ECR.
 
+> 🧪 **Real run (22 Nov 2026):** both images signed and verified (`The signatures were verified against the specified public key`). Keep the ECR repos (a few cents/month): Step 03 pulls these images and Step 07 checks these signatures.
+
 ---
 
 ## Common problems
@@ -594,7 +604,7 @@ cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend@$BACKEND_DIGEST > /de
 | ECR shows HIGH/CRITICAL that Trivy passed | Scanners use different severity sources (Alpine vs NVD) | Patch anyway if a fix exists: `apk upgrade --no-cache` in the Dockerfile |
 | Trivy finds CVEs under `usr/local/lib/node_modules/npm/...` | They are in **npm**, which ships inside the Node base image | Delete npm/npx/yarn/corepack after `npm ci` (see `app/backend/Dockerfile`): the app runs with `node` only |
 | Newest base image still has a CVE in nginx | That nginx version isn't released in the stable tag yet | Use a newer line (`1.31-alpine` mainline) and `apk upgrade --no-cache` |
-| `cosign: ... UNAUTHORIZED` | Cosign uses Docker's login | Repeat the `docker login` (Task 6) |
+| `cosign: ... UNAUTHORIZED` / `401 Unauthorized` | Cosign uses Docker's login from `~/.docker/config.json`. **Snap Docker** saves it elsewhere, or the 12-hour token expired | `aws ecr get-login-password --region us-east-1 \| cosign login --username AWS --password-stdin $ECR` |
 | `cosign sign` error about an existing tag `sha256-....sig` | Signing the same digest twice in an IMMUTABLE repo (old signature format) | It is already signed: run `cosign verify` |
 
 ## Interview Questions
@@ -638,8 +648,8 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 | 4 | Build `prod-backend:v1` + `prod-frontend:v1` | ✅ 22 Nov |
 | 5 | Trivy scan: **failed first** (backend 6 HIGH, frontend 5 CRITICAL + 15 HIGH) → fixed the Dockerfiles → both **0** | ✅ 22 Nov |
 | 6 | `docker login` to ECR + push. ECR scan **failed first** (backend 1 CRITICAL + 4 HIGH that Trivy rated low) → `apk upgrade` + re-push → both **0** | ✅ 22 Nov |
-| 7 | `cosign generate-key-pair` → `~/.cosign` (outside the repo) | ⏳ |
-| 8 | `cosign sign` the digest + `cosign verify` | ⏳ |
+| 7 | `cosign generate-key-pair` → `~/.cosign` (outside the repo): `cosign.key` `-rw-------`, `cosign.pub` `-rw-r--r--` | ✅ 22 Nov |
+| 8 | `cosign sign` the digest + `cosign verify`: **401 first** (snap Docker login not visible to cosign) → `cosign login` → both signed + verified | ✅ 22 Nov |
 
 ### Where each tool is used
 
@@ -668,4 +678,5 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 | Trivy: backend **6 HIGH** in `brace-expansion` + `undici`, inside **npm itself** (`/usr/local/lib/node_modules/npm`), not in my app | npm is only needed to **install**, not to run → `RUN rm -rf` npm/npx/yarn/corepack after `npm ci` → **0** |
 | ECR scan: `ScanNotFoundException` for `imageTag=v1` | Docker 29 pushed `v1` as an **image index** + attestation; ECR scans only the real image inside | Build with `--provenance=false` → `v1` is a plain image, scan by tag works |
 | ECR scan: backend **1 CRITICAL + 4 HIGH** (zlib, openssl) but Trivy said 0 | Same CVEs, different rating: Trivy uses Alpine's (LOW/MEDIUM), ECR uses NVD's | `RUN apk upgrade --no-cache` in the backend → zlib 1.4-r0, openssl 3.5.9-r1 → ECR `{}` |
+| `cosign sign`: `401 Unauthorized` | Snap Docker saved the ECR login in `~/snap/docker/current/.docker/config.json`; cosign reads `~/.docker/config.json` | `aws ecr get-login-password --region us-east-1 \| cosign login --username AWS --password-stdin $ECR` |
 | Trivy: frontend **5 CRITICAL + 15 HIGH** (nginx, curl, brotli). Newest `1.30-alpine` still had nginx 1.30.6 (fix needs 1.30.7) | Switched to nginx mainline `1.31-alpine` + `RUN apk upgrade --no-cache` (as root, then back to `USER 101`) → **0** |
