@@ -602,3 +602,47 @@ Small base (Alpine/distroless), production dependencies only, a non-root user, c
 
 **Q7. Does a signed image mean it has no vulnerabilities?**
 No. A signature proves **who** built the image and that it is **unchanged**; a scan checks for **vulnerabilities**. They become linked only because the pipeline signs **after** the scan passes, so "signed" means "passed our pipeline". New CVEs can still appear later, so registries keep rescanning.
+
+---
+
+## 📝 Summary: what we do in Step 02
+
+**One line:** build the app images on the laptop, scan them (Trivy), push them to private ECR and sign them (Cosign), so the cluster runs only checked, trusted images.
+
+### Progress
+
+| Task | What | Status |
+|---|---|---|
+| 1 | Docker without `sudo` (snap Docker → created the `docker` group) | ✅ 22 Nov |
+| 2 | Installed Trivy 0.76.2 + Cosign v3.1.4 (installed only, not used yet) | ✅ 22 Nov |
+| 3 | Ran the app locally with `docker compose` (frontend + backend + MySQL), saved a task in MySQL | ✅ 22 Nov |
+| 4 | Build `prod-backend:v1` + `prod-frontend:v1` | ⏳ |
+| 5 | Trivy scan (stop on HIGH/CRITICAL with a fix) | ⏳ |
+| 6 | `docker login` to ECR + push | ⏳ |
+| 7 | `cosign generate-key-pair` → `~/.cosign` (outside the repo) | ⏳ |
+| 8 | `cosign sign` the digest + `cosign verify` | ⏳ |
+
+### Where each tool is used
+
+| Tool | Installed | Used in | Job |
+|---|---|---|---|
+| Docker | Laptop | Tasks 3, 4, 6 | Build, run and push images |
+| Trivy | Laptop | Task 5 | Find known vulnerabilities (CVEs) |
+| Cosign | Laptop | Tasks 7, 8 | Sign the image (private key), verify (public key) |
+| AWS CLI | Laptop | Tasks 4, 6, 8 | Account ID, ECR login, image digest |
+
+### Manual now → automatic later
+
+| Step | Who signs / checks |
+|---|---|
+| 02 (now) | **You**, by hand on the laptop |
+| 07 | **Kyverno** checks the signature with `cosign.pub` and blocks unsigned images |
+| 10 | **GitHub Actions** builds → scans → pushes → signs on every push |
+
+### Problems faced → fixed
+
+| Problem | Fix |
+|---|---|
+| `usermod: group 'docker' does not exist` (Docker is a snap) | `sudo addgroup --system docker` + restart the snap |
+| No `docker.service` to restart | `sudo snap restart docker` |
+| Laptop froze on the first `docker compose up --build` | Hard reboot; worked fine after |
