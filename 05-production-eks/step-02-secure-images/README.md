@@ -2,6 +2,8 @@
 
 [⬅ Back to the project overview](../README.md) · [⬅ Step 01](../step-01-infrastructure/README.md) · [Step 03 ➡](../step-03-deploy-app/README.md)
 
+> 🛠️ Something failed? See **[Troubleshooting](./TROUBLESHOOTING.md)**: every error from the real run, with why and fix.
+
 ## What you will build in this step
 
 The two app images (frontend and backend), **checked for known vulnerabilities**, **signed** with your own key, and stored in your **private ECR**.
@@ -110,6 +112,9 @@ All app code is in [`../app`](../app).
 ```dockerfile
 FROM node:24-alpine
 
+# Get the latest Alpine security fixes (openssl, zlib...)
+RUN apk upgrade --no-cache
+
 WORKDIR /app
 
 # Copy only the package files first → this layer is cached until dependencies change
@@ -117,6 +122,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY server.js ./
+
+# Remove npm, npx, yarn, corepack: needed to install, not to run (they bring CVEs)
+RUN rm -rf /usr/local/lib/node_modules /opt/yarn-* /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/corepack
 
 USER node
 
@@ -129,16 +137,21 @@ CMD ["node", "server.js"]
 | Line | Explained |
 |---|---|
 | `FROM node:24-alpine` | Node.js **24 LTS** (supported until 2028) on **Alpine** Linux: a tiny base = fewer packages = fewer CVEs |
+| `RUN apk upgrade --no-cache` | Update Alpine packages to their patched versions (the base image can be weeks old). Runs as root, before `USER node` |
 | `COPY package.json package-lock.json ./` | Dependencies first: Docker caches this layer, so rebuilding after a code change is fast |
 | `npm ci --omit=dev` | Installs **exactly** the versions in the lock file, **without** test/dev tools |
 | `npm cache clean --force` | Removes the download cache: smaller image |
+| `RUN rm -rf ... npm ...` | Deletes npm/npx/yarn/corepack. They are needed only to **install**; the app **runs** with `node` alone. Fewer tools = fewer CVEs. Your app's libraries in `/app/node_modules` stay |
 | `USER node` | Runs as user `node` (uid 1000), **not root** |
 | `EXPOSE 8080` | Port above 1024: a non-root user is allowed to open it |
 
 ### `app/frontend/Dockerfile`
 
 ```dockerfile
-FROM nginxinc/nginx-unprivileged:1.30-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
+USER root
+RUN apk upgrade --no-cache
+USER 101
 ENV BACKEND_URL=http://backend:8080
 COPY default.conf.template /etc/nginx/templates/default.conf.template
 COPY index.html /usr/share/nginx/html/index.html
@@ -147,7 +160,8 @@ EXPOSE 8080
 
 | Line | Explained |
 |---|---|
-| `nginx-unprivileged:1.30-alpine` | Official nginx build that runs as user **101** and listens on **8080** (normal nginx needs root for port 80). `1.30` = current stable branch |
+| `nginx-unprivileged:1.31-alpine` | Official nginx build that runs as user **101** and listens on **8080** (normal nginx needs root for port 80). `1.31` = mainline branch (gets security fixes first) |
+| `USER root` → `RUN apk upgrade --no-cache` → `USER 101` | Become root only to patch Alpine packages, then switch back to the non-root nginx user |
 | `BACKEND_URL` | Where `/api/` calls are forwarded. Kubernetes sets it to the backend Service |
 | `templates/default.conf.template` | At start, nginx fills `${BACKEND_URL}` in and writes the real config |
 
@@ -410,8 +424,6 @@ trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 $ECR/prod-fr
 | `--exit-code 1` | Return "failed" if any are found. In CI this **stops the pipeline** (Step 10) |
 | `trivy image <name>` | Scan this local image: OS packages (Alpine) **and** app libraries (npm) |
 
-> 🧪 **Real run (22 Nov 2026):** the first scan **failed**: backend 6 HIGH (in npm itself, not the app), frontend 5 CRITICAL + 15 HIGH (nginx/curl/brotli in the base image). Fixed in the Dockerfiles (remove npm after install; nginx `1.31-alpine` + `apk upgrade`), rebuilt, scanned again → both `0`. The fixes are now in the code, so your scan should pass the first time.
-
 ✅ **Check:** each scan ends with `Total: 0` and no error. Check the exit code:
 
 ```bash
@@ -420,7 +432,9 @@ echo $?
 
 > `$?` = the exit code of the **last** command (0 = success). Run it right after the scan.
 
-> ✅ `0` = clean. `1` = something found: read the table (library, CVE, fixed version). Usually the fix is to rebuild with a newer base image: `docker pull node:24-alpine` (or `nginxinc/nginx-unprivileged:1.30-alpine`), then repeat Task 4.
+> ✅ `0` = clean. `1` = something found: read the table (library, CVE, fixed version), fix, then repeat Task 4.
+
+> 🛠️ Scan failed? → [Troubleshooting #3 (npm CVEs)](./TROUBLESHOOTING.md#3-trivy-backend-6-high-inside-npm) · [#4 (nginx CVEs)](./TROUBLESHOOTING.md#4-trivy-frontend-5-critical--15-high)
 
 ---
 
@@ -472,7 +486,7 @@ aws ecr describe-image-scan-findings --repository-name prod-backend --image-id i
 
 > ✅ `{}` or only LOW/MEDIUM counts. That's the **second** scan, done by AWS. (No output at all = also clean: no findings.)
 
-> 🧪 **Real run (22 Nov 2026):** ECR found **1 CRITICAL + 4 HIGH** (zlib, openssl) in the backend that Trivy had passed. Same CVEs, but Trivy uses **Alpine's** rating (LOW/MEDIUM) and ECR uses **NVD's** (HIGH/CRITICAL). Fixes existed, so we added `RUN apk upgrade --no-cache` to the backend Dockerfile, deleted the repos (`terraform destroy -target=aws_ecr_repository.app` → `apply -target`), rebuilt, pushed again → ECR `{}` for both. Two scanners catch more than one.
+> 🛠️ `ScanNotFoundException`? → [Troubleshooting #5](./TROUBLESHOOTING.md#5-ecr-scannotfoundexception) · ECR shows HIGH/CRITICAL that Trivy passed? → [#6](./TROUBLESHOOTING.md#6-ecr-finds-criticalhigh-that-trivy-passed)
 
 > 💡 **Immutable tags:** if you ever push a *different* image as `v1`, ECR refuses with `tag invalid: The image tag 'v1' already exists ... cannot be overwritten because the repository is immutable`. Every new build needs a new tag (`v2`, or the commit SHA in Step 10).
 
@@ -552,7 +566,7 @@ Log cosign in to ECR (needed with **snap** Docker, harmless otherwise):
 aws ecr get-login-password --region us-east-1 | cosign login --username AWS --password-stdin $ECR
 ```
 
-> Cosign normally reuses Docker's login from `~/.docker/config.json`. Snap Docker saves it in `~/snap/docker/current/.docker/config.json`, so cosign gets `401 Unauthorized` without this.
+> Cosign reuses Docker's login from `~/.docker/config.json`; snap Docker saves it elsewhere. Without this: `401 Unauthorized` ([Troubleshooting #7](./TROUBLESHOOTING.md#7-cosign-sign-401-unauthorized)).
 
 Sign (it asks for your key password):
 
@@ -587,25 +601,13 @@ cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend@$BACKEND_DIGEST > /de
 
 🎉 **Step 02 is done.** Two scanned, signed images are in ECR.
 
-> 🧪 **Real run (22 Nov 2026):** both images signed and verified (`The signatures were verified against the specified public key`). Keep the ECR repos (a few cents/month): Step 03 pulls these images and Step 07 checks these signatures.
+> Keep the ECR repos (a few cents/month): Step 03 pulls these images and Step 07 checks these signatures.
 
 ---
 
-## Common problems
+## Troubleshooting
 
-| Error | Why | Fix |
-|---|---|---|
-| `permission denied ... docker.sock` | User not in the `docker` group | Task 1 |
-| `no basic auth credentials` / `denied` on push | Docker not logged in to ECR, or the 12-hour token expired | Repeat the `docker login` command in Task 6 |
-| `name unknown: The repository with name 'prod-backend' does not exist` | Step 01 infrastructure is destroyed | `terraform apply` (Step 01) |
-| `tag invalid ... already exists` | IMMUTABLE tags: `v1` is taken by a different image | Use a new tag: `v2` |
-| Trivy `exit code 1` | HIGH/CRITICAL CVE with a fix | `docker pull` the newer base image, rebuild (Task 4) |
-| `ScanNotFoundException` on `describe-image-scan-findings` | `v1` is an image index (built without `--provenance=false`) | Rebuild with `--provenance=false`; or look up the scan by the inner image's digest |
-| ECR shows HIGH/CRITICAL that Trivy passed | Scanners use different severity sources (Alpine vs NVD) | Patch anyway if a fix exists: `apk upgrade --no-cache` in the Dockerfile |
-| Trivy finds CVEs under `usr/local/lib/node_modules/npm/...` | They are in **npm**, which ships inside the Node base image | Delete npm/npx/yarn/corepack after `npm ci` (see `app/backend/Dockerfile`): the app runs with `node` only |
-| Newest base image still has a CVE in nginx | That nginx version isn't released in the stable tag yet | Use a newer line (`1.31-alpine` mainline) and `apk upgrade --no-cache` |
-| `cosign: ... UNAUTHORIZED` / `401 Unauthorized` | Cosign uses Docker's login from `~/.docker/config.json`. **Snap Docker** saves it elsewhere, or the 12-hour token expired | `aws ecr get-login-password --region us-east-1 \| cosign login --username AWS --password-stdin $ECR` |
-| `cosign sign` error about an existing tag `sha256-....sig` | Signing the same digest twice in an IMMUTABLE repo (old signature format) | It is already signed: run `cosign verify` |
+All errors (real run + common ones), each with **why** and **fix**: **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)**
 
 ## Interview Questions
 
@@ -678,15 +680,17 @@ docker build ──► Trivy scan ──► docker push ──► ECR scan ─�
 
 ### Problems faced → fixed
 
-| # | Problem | Why | Fix |
-|---|---|---|---|
-| 1 | `group 'docker' does not exist` | Snap Docker doesn't create the group | `addgroup --system docker` + `usermod -aG docker $USER` |
-| 2 | Laptop froze on first `compose up --build` | Heavy first build | Hard reboot; fine after. Restart Docker = `sudo snap restart docker` |
-| 3 | Trivy: backend **6 HIGH** | CVEs inside **npm** (comes in the Node base image), not my app | Delete npm/npx/yarn/corepack after `npm ci`: the app runs with `node` only |
-| 4 | Trivy: frontend **5 CRITICAL + 15 HIGH** | nginx 1.30.6 + old Alpine packages; no fixed 1.30 image yet | nginx `1.31-alpine` + `apk upgrade --no-cache` |
-| 5 | ECR: `ScanNotFoundException` | Docker 29 pushed `v1` as an **image index** | `docker build --provenance=false` |
-| 6 | ECR: backend **1 CRITICAL + 4 HIGH**, Trivy said 0 | Same CVEs, different rating: Alpine (low) vs NVD (high) | `apk upgrade --no-cache` in the backend, re-created repos, re-pushed |
-| 7 | `cosign sign`: **401 Unauthorized** | Snap Docker saves the login in its own folder; cosign reads `~/.docker/config.json` | `cosign login` with the ECR password |
+| # | Problem | Fix |
+|---|---|---|
+| 1 | `docker` group missing (snap Docker) | Created the group, added my user |
+| 2 | Laptop froze on first build | Reboot; `sudo snap restart docker` |
+| 3 | Trivy: CVEs inside npm | Removed npm from the image |
+| 4 | Trivy: CVEs in nginx/curl/brotli | nginx `1.31-alpine` + `apk upgrade` |
+| 5 | ECR `ScanNotFoundException` | `--provenance=false` |
+| 6 | ECR CRITICAL that Trivy rated low | `apk upgrade` in backend, re-push |
+| 7 | `cosign sign` 401 | `cosign login` |
+
+Full details (error, why, fix, commands): **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)**
 
 ### Manual now → automatic later
 

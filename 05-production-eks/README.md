@@ -20,7 +20,7 @@ Every step explains **what** you are doing and **why**, with every piece of code
 | # | Step | What you do | Topic you learn |
 |---|---|---|---|
 | 01 | **[Infrastructure](./step-01-infrastructure/README.md)** | Network, EKS cluster, 2 node groups, bastion, ECR, all with Terraform | VPC, EKS, node groups, taints, IMDS, add-ons |
-| 02 | **[Secure images](./step-02-secure-images/README.md)** | Build, scan, push and sign the app images | Supply chain security: Trivy, ECR, Cosign |
+| 02 | **[Secure images](./step-02-secure-images/README.md)** · [🛠️ Troubleshooting](./step-02-secure-images/TROUBLESHOOTING.md) | Build, scan, push and sign the app images | Supply chain security: Trivy, ECR, Cosign |
 | 03 | **[Deploy the app](./step-03-deploy-app/README.md)** | Install the app with Helm, a load balancer and a database disk | Helm, AWS Load Balancer Controller, ALB, EBS |
 | 04 | **[RBAC + ServiceAccounts](./step-04-rbac/README.md)** | Give people and apps only the permissions they need | RBAC, access entries, ServiceAccounts |
 | 05 | **[Pod hardening](./step-05-pod-hardening/README.md)** | Prove containers run non-root, read-only, with no extra powers | securityContext, Pod Security Standards |
