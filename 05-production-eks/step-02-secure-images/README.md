@@ -247,6 +247,15 @@ exec su -l $USER
 
 > **Why a group?** Docker runs as a root service. Only root and members of `docker` may use its socket.
 
+> 📝 **In short:** no new user is created. We create the `docker` **group** and add **my existing user** to it, so I can run docker commands **without sudo**.
+>
+> ```
+> BEFORE: groups = sri-abhi, sudo ...           → docker ps ❌ permission denied
+> AFTER:  groups = sri-abhi, sudo ..., docker   → docker ps ✅ works without sudo
+> ```
+>
+> Check your groups: `groups` (you should see `docker`).
+
 ✅ **Check:** `docker ps` prints a table header without errors.
 
 ---
@@ -613,7 +622,7 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 
 | Task | What | Status |
 |---|---|---|
-| 1 | Docker without `sudo` (snap Docker → created the `docker` group) | ✅ 22 Nov |
+| 1 | Created the `docker` **group** (snap Docker didn't create it) and added my **user** to it, so docker commands run **without sudo** | ✅ 22 Nov |
 | 2 | Installed Trivy 0.76.2 + Cosign v3.1.4 (installed only, not used yet) | ✅ 22 Nov |
 | 3 | Ran the app locally with `docker compose` (frontend + backend + MySQL), saved a task in MySQL | ✅ 22 Nov |
 | 4 | Build `prod-backend:v1` + `prod-frontend:v1` | ⏳ |
