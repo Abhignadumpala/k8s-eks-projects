@@ -1,0 +1,34 @@
+# ───────────────────────────────────────────────
+# Step 07, Task 7: practise a SAFE policy rollout (Audit → Deny)
+# Only checks namespace "policy-lab". Apply with:
+#   envsubst '${ACCOUNT_ID}' < policy-lab-guardrails.yaml | kubectl apply -f -
+# ───────────────────────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: policy-lab-guardrails
+spec:
+  validationActions: [Audit]          # 1st: only REPORT. Task 7 later switches it to [Deny]
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: policy-lab
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  validations:
+    - expression: >-
+        object.spec.containers.all(c,
+          !has(c.env) || c.env.all(e,
+            e.name != 'AWS_ACCESS_KEY_ID' && e.name != 'AWS_SECRET_ACCESS_KEY'))
+      message: "Do not put static AWS access keys in Pods. Use EKS Pod Identity."
+    - expression: >-
+        object.spec.containers.all(c,
+          c.image.startsWith('${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/') ||
+          c.image.startsWith('public.ecr.aws/docker/library/'))
+      message: "Images must come from our ECR or public.ecr.aws/docker/library."
+    - expression: >-
+        object.spec.containers.all(c, c.image.contains(':') && !c.image.endsWith(':latest'))
+      message: "The :latest tag is not allowed. Use a version tag or a digest."

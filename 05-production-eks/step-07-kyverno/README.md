@@ -23,7 +23,7 @@ kubectl / Helm / Argo CD ──► API server ──► Kyverno admission webhoo
 | Runs on | 💻 Laptop (Terraform, Docker, VS Code) + 🖥️ Bastion |
 | New AWS resources | 1 IAM role + Pod Identity association (Kyverno reads ECR) |
 | Kyverno | v1.20 (chart 3.10.0), new **CEL** policy types |
-| Time | ~45 min |
+| Time | ~65 min |
 
 ---
 
@@ -48,10 +48,16 @@ kubectl / Helm / Argo CD ──► API server ──► Kyverno admission webhoo
 
 Kyverno now uses **CEL** (Common Expression Language), the same language Kubernetes uses for its own built-in rules. The old `ClusterPolicy` kind is **deprecated**, so we use the new types:
 
-| Kind | Used for | Our policies |
-|---|---|---|
-| `ValidatingPolicy` | Allow/deny based on the object's fields | registries, latest tag, resources, AWS keys |
-| `ImageValidatingPolicy` | Check image signatures / attestations | Cosign signature |
+| Kind | Used for | Example | In this project |
+|---|---|---|---|
+| `ValidatingPolicy` | Allow/deny based on the object's fields | Deny Pods with AWS key env vars | ✅ registries, latest tag, resources, AWS keys |
+| `ImageValidatingPolicy` | Check image signatures / attestations | Only images signed by our CI | ✅ Cosign signature |
+| `MutatingPolicy` | Change objects on the way in | Add standard labels or safe defaults | — |
+| `GeneratingPolicy` | Create related objects when something appears | A default ConfigMap/NetworkPolicy in every new namespace | — |
+| `DeletingPolicy` | Delete matching objects on a schedule | Remove expired test resources | — |
+| `PolicyException` | **Not a policy**: exempts chosen resources from chosen policies | Allow one documented legacy app during a migration | — |
+
+All use `apiVersion: policies.kyverno.io/v1`. Most also have a **namespaced** variant (e.g. `NamespacedValidatingPolicy`) so a team can own policies in its namespace.
 
 **CEL in 30 seconds:**
 
@@ -66,6 +72,51 @@ Kyverno now uses **CEL** (Common Expression Language), the same language Kuberne
 ### Autogen: rules for Pods also protect Deployments
 
 We write rules for **Pods**. Kyverno automatically creates matching rules for Deployments, StatefulSets and so on (it looks at `spec.template.spec`). A bad Deployment is refused **immediately**, instead of creating a Deployment whose Pods silently never start.
+
+### Pod Identity vs Kyverno: two different layers
+
+| Layer | Controls | Question it answers |
+|---|---|---|
+| **Pod Identity / IRSA** (Step 06) | What an approved Pod may do **in AWS** | *"May this Pod read that bucket?"* |
+| **Kyverno** (this step) | Which objects may be **created in Kubernetes**, and how they must look | *"May this Pod even run, with this image and these settings?"* |
+
+**Real risk that needs both:** a developer runs a debug image from Docker Hub in `payments`, using a ServiceAccount with a powerful AWS role. Code inside that image (or a compromised package) can now use the role. Pod Identity alone can't stop it, because the Pod *is* allowed that role; Kyverno blocks the untrusted image. Neither replaces the other.
+
+> **Key takeaway:** *Pod Identity decides what a Pod can do in AWS. Kyverno decides which workloads are allowed to run and what guardrails they must satisfy.*
+
+### Audit vs Deny, and a safe rollout
+
+| `validationActions` | What happens to a bad Pod |
+|---|---|
+| `[Audit]` | Created ✅, but recorded as `FAIL` in a **PolicyReport** |
+| `[Deny]` | Refused ❌ with the message |
+
+Never switch a **new** policy straight to `Deny` in production. You could break running teams. The safe order:
+
+```
+1. Audit      apply with [Audit]
+2. Measure    kubectl get policyreport -A   → who would be blocked?
+3. Fix        move images to ECR, pin versions/digests, remove static keys
+4. Exceptions narrow PolicyException only where a fix must wait (owner, reason, expiry)
+5. Staging    switch to [Deny] in a non-production cluster, test allowed AND rejected Pods
+6. Promote    to production step by step, with monitoring and a rollback plan
+7. Images     add signature verification (ImageValidatingPolicy + Cosign)
+```
+
+> **PolicyReports** show the **current** result for objects that exist now. They are not a permanent history log (for that: audit logs / CloudTrail).
+> A **PolicyException** is a controlled bypass, not a fix. Keep it narrow and time-bound.
+
+Task 7 practises steps 1, 2, 3 and 5.
+
+### What these rules can NOT do
+
+| Limitation | So also… |
+|---|---|
+| A registry check doesn't prove an image is safe, scanned or signed | Scan (Step 02) and verify signatures (Task 5) |
+| A tag other than `latest` can still be overwritten | ECR **immutable tags** (Step 01) or digests |
+| Checking only `spec.containers` misses `initContainers` / `ephemeralContainers` | Our registry and latest-tag rules include init containers; extend the others if needed |
+| Every excluded namespace is a possible bypass | We match only `three-tier`; in production, exclude as little as possible and review it |
+| An env-var name check isn't a secret scanner | Keys can also hide in files, arguments or images: scan images, use Pod Identity |
 
 ### Why each rule
 
@@ -228,6 +279,7 @@ Task 3  Apply the 4 rule policies              🖥️
 Task 4  Test them with bad Pods                🖥️
 Task 5  Add your public key + apply signature  📝 laptop → 🖥️
 Task 6  Test signatures (signed vs unsigned)   💻 + 🖥️
+Task 7  Safe rollout: Audit → Deny             🖥️  (namespace policy-lab)
 ```
 
 ---
@@ -452,6 +504,102 @@ kubectl get policyreports -n three-tier
 
 > ✅ Rows with `PASS` counts and `FAIL 0`.
 
+---
+
+## Task 7 — Roll out a new policy safely: Audit → Deny
+
+📍 **Where:** 🖥️ Bastion
+
+**Scenario:** a team already runs a "legacy" app with a Docker Hub image, `:latest` and an AWS key in an env var. You introduce guardrails **without breaking it on day one**: Audit first, fix, then Deny. We use a separate namespace `policy-lab`, so the real app is never touched.
+
+File: [`platform/policies/lab/policy-lab-guardrails.yaml`](../platform/policies/lab/policy-lab-guardrails.yaml): 3 rules (no AWS keys, only trusted registries, no `:latest`) in **Audit** mode, only for `policy-lab`.
+
+▶️ **Do:** 1) the namespace and the "legacy" app that breaks all 3 rules:
+
+```bash
+kubectl create namespace policy-lab
+```
+
+```bash
+kubectl run legacy-app -n policy-lab --image=busybox:latest --restart=Never --env=AWS_ACCESS_KEY_ID=fake-key-for-test --command -- sleep 3600
+```
+
+> ✅ `pod/legacy-app created`: no policy yet. The key is fake, never put a real one anywhere.
+
+2) Apply the policy in **Audit** mode:
+
+```bash
+cd ~/k8s-eks-projects/05-production-eks/platform/policies/lab
+```
+
+```bash
+envsubst '${ACCOUNT_ID}' < policy-lab-guardrails.yaml | kubectl apply -f -
+```
+
+```bash
+kubectl get validatingpolicy policy-lab-guardrails
+```
+
+> ✅ `READY true`, actions `Audit`.
+
+3) A new bad Pod is **still allowed** (Audit doesn't block):
+
+```bash
+kubectl run legacy-app-2 -n policy-lab --image=busybox:latest --restart=Never --env=AWS_ACCESS_KEY_ID=fake-key-for-test --command -- sleep 3600
+```
+
+> ✅ `pod/legacy-app-2 created`.
+
+4) **Measure:** read the reports (wait ~30 s for the reports controller):
+
+```bash
+kubectl get policyreport -n policy-lab
+```
+
+> ✅ One row per Pod with `FAIL` > 0.
+
+```bash
+kubectl get policyreport -n policy-lab -o jsonpath='{range .items[*].results[*]}{.result}{"  "}{.message}{"\n"}{end}'
+```
+
+> ✅ `fail` with the reasons: AWS keys / registry / latest tag. Now you know **who** would break, before blocking anything.
+
+5) **Fix** the workload: trusted registry, pinned tag, no keys:
+
+```bash
+kubectl delete pod legacy-app legacy-app-2 -n policy-lab
+```
+
+```bash
+kubectl run fixed-app -n policy-lab --image=public.ecr.aws/docker/library/busybox:1.37 --restart=Never --command -- sleep 3600
+```
+
+```bash
+kubectl get policyreport -n policy-lab
+```
+
+> ✅ After ~30 s: `PASS` > 0, `FAIL 0`.
+
+6) **Enforce:** switch to Deny:
+
+```bash
+kubectl patch validatingpolicy policy-lab-guardrails --type merge -p '{"spec":{"validationActions":["Deny"]}}'
+```
+
+```bash
+kubectl run legacy-app-3 -n policy-lab --image=busybox:latest --restart=Never --env=AWS_ACCESS_KEY_ID=fake-key-for-test --command -- sleep 3600
+```
+
+> ✅ `denied the request` with the 3 messages. The fixed app keeps running.
+
+7) Clean up:
+
+```bash
+kubectl delete namespace policy-lab && kubectl delete validatingpolicy policy-lab-guardrails
+```
+
+✅ **Check:** you rolled out a policy the production way: **Audit → measure → fix → Deny**, and nothing running broke.
+
 🎉 **Step 07 is done.**
 
 ---
@@ -463,28 +611,43 @@ kubectl get policyreports -n three-tier
 | Signed `v1` also denied, log says `UNAUTHORIZED` / `no basic auth` | Kyverno can't log in to ECR | Task 1 applied? `aws eks list-pod-identity-associations` (laptop) must show `kyverno / kyverno-admission-controller`. Then `kubectl rollout restart deploy/kyverno-admission-controller -n kyverno` |
 | Signed `v1` denied: `no matching signatures` | Wrong public key pasted, or signed with a different key | Compare with `~/.cosign/cosign.pub`. Re-check on the laptop: `cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend:v1` |
 | `failed calling webhook ... context deadline exceeded` | Kyverno slow or down (`failurePolicy: Fail`) | `kubectl get pods -n kyverno`; wait, then retry |
-| Policy `READY false` | CEL syntax error | `kubectl describe validatingpolicy <name>` |
+| Policy `READY false` | CEL syntax error, or this Kyverno version doesn't know the kind/field | `kubectl describe validatingpolicy <name>`; `kubectl get crd \| grep policies.kyverno.io` |
+| Policy seems to do nothing | Namespace not matched, wrong kind/operation, or it's in `Audit` | Check `namespaceSelector` and `resourceRules`; `kubectl get validatingpolicies` shows the actions; test one Pod that should pass and one that should fail |
+| No PolicyReport | Reports controller not ready, or wait time | `kubectl get pods -n kyverno` (`reports` Running); wait 30–60 s |
 | Message shows `${ACCOUNT_ID}` | Applied without envsubst | Re-run Task 3 |
-| Want to roll out a new rule safely | — | Use `validationActions: [Audit]` first, check `kubectl get policyreports`, then switch to `[Deny]` |
 
 ## Interview Questions
 
+### ⭐ Very Important
+
+**Q1. Pod Identity and Kyverno: what does each one control?**
+Pod Identity (or IRSA) controls what an approved Pod can do **in AWS**. Kyverno controls which resources are **admitted** to Kubernetes and how they're configured. You need both: a powerful role plus an untrusted image is the real risk.
+
+**Q2. How do you introduce a new policy without breaking production?**
+Audit first, read `kubectl get policyreport -A`, fix violators, use narrow time-bound PolicyExceptions where needed, test Deny in staging, then roll out to production gradually with a rollback plan.
+
+**Q3. What Kyverno policy types exist today?**
+`ValidatingPolicy`, `MutatingPolicy`, `GeneratingPolicy`, `ImageValidatingPolicy` and `DeletingPolicy` (CEL, `policies.kyverno.io/v1`), plus `PolicyException` for exemptions. The old `ClusterPolicy` is deprecated.
+
+**Q4. What is a PolicyException?**
+A controlled bypass for specific resources and policies, e.g. a legacy app during migration. Keep it narrow, with an owner, a reason and an expiry. It's not a substitute for fixing the workload.
+
+**Q5. Is a "trusted registry" rule enough to trust an image?**
+No. It doesn't prove the image is scanned or signed, and non-`latest` tags can still change. Add scanning, immutable tags/digests, and signature verification.
+
 ### Other Questions
 
-**Q1. What is an admission controller?**
+**Q6. What is an admission controller?**
 A plugin the API server calls before saving an object. Validating ones allow/deny, mutating ones change the object. Kyverno and PSA are admission controllers.
 
-**Q2. Kyverno vs OPA Gatekeeper?**
+**Q7. Kyverno vs OPA Gatekeeper?**
 Both are policy engines. Kyverno policies are Kubernetes YAML with CEL expressions, and include image verification and generation. Gatekeeper uses Rego, a separate language.
 
-**Q3. How do you make sure only trusted images run?**
+**Q8. How do you make sure only trusted images run?**
 Restrict registries, forbid mutable tags, scan in CI, sign images in the pipeline, and verify signatures at admission with Kyverno (`failurePolicy: Fail`).
 
-**Q4. What does `failurePolicy: Fail` mean and what is the risk?**
+**Q9. What does `failurePolicy: Fail` mean and what is the risk?**
 If the webhook can't answer, requests are refused: safe, but Kyverno becomes critical. Run it highly available and exclude system namespaces.
 
-**Q5. How do you introduce a new policy without breaking production?**
-Start in Audit mode, read the policy reports, fix violators, then switch to Deny.
-
-**Q6. Why no CPU limit in the policy?**
+**Q10. Why no CPU limit in the policy?**
 CPU limits throttle bursty apps even when the node is idle. Memory limits protect the node from out-of-memory problems; CPU requests are enough for scheduling and HPA.

@@ -24,8 +24,8 @@ Every step explains **what** you are doing and **why**, with every piece of code
 | 03 | **[Deploy the app](./step-03-deploy-app/README.md)** | Install the app with Helm, a load balancer and a database disk | Helm, AWS Load Balancer Controller, ALB, EBS |
 | 04 | **[RBAC + ServiceAccounts](./step-04-rbac/README.md)** | Give people and apps only the permissions they need | RBAC, access entries, ServiceAccounts |
 | 05 | **[Pod hardening](./step-05-pod-hardening/README.md)** | Prove containers run non-root, read-only, with no extra powers | securityContext, Pod Security Standards |
-| 06 | **[Pod Identity + secrets](./step-06-pod-identity-secrets/README.md)** | DB passwords from AWS Secrets Manager, no keys anywhere | EKS Pod Identity, External Secrets |
-| 07 | **[Policy guardrails](./step-07-kyverno/README.md)** | Block untrusted registries, `:latest`, missing limits, AWS keys, unsigned images | Kyverno (CEL policies) |
+| 06 | **[Pod Identity + secrets](./step-06-pod-identity-secrets/README.md)** | DB passwords from AWS Secrets Manager, no keys anywhere; prove least privilege with an S3-reader Pod | EKS Pod Identity (Terraform + CLI), IRSA, External Secrets |
+| 07 | **[Policy guardrails](./step-07-kyverno/README.md)** | Block untrusted registries, `:latest`, missing limits, AWS keys, unsigned images; roll out a policy safely (Audit → Deny) | Kyverno (CEL policies), PolicyReports |
 | 08 | **[Service mesh](./step-08-istio-mtls/README.md)** | Encrypt traffic and allow only frontend → backend → db | Istio ambient, mTLS, AuthorizationPolicy |
 | 09 | **[High availability](./step-09-high-availability/README.md)** | Survive Pod/node failures, scale Pods and nodes automatically | Probes, spread, PDB, HPA, Karpenter, Spot |
 | 10 | **[GitOps + canary](./step-10-gitops-canary/README.md)** | `git push` → CI builds and signs → Argo CD deploys → canary release | GitHub Actions OIDC, Argo CD, Argo Rollouts |
