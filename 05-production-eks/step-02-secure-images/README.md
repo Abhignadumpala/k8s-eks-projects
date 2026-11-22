@@ -212,6 +212,8 @@ Task 8  Sign and verify                 💻
 docker ps
 ```
 
+> `docker ps` = list running containers. Here it's just a test: can **you** talk to Docker without `sudo`?
+
 Works (prints a table, maybe empty)? Go to Task 2. Permission denied? Run:
 
 ```bash
@@ -235,6 +237,15 @@ exec su -l $USER
 ```
 
 > Other terminals: log out of Ubuntu and back in once. (`newgrp docker` also works if it's installed.)
+
+| Command / part | Meaning |
+|---|---|
+| `sudo usermod -aG docker $USER` | Add (`-a` append, `-G` group) your user (`$USER` = your username, **capital letters**) to the group `docker` |
+| `sudo addgroup --system docker` | Create the group `docker` (`--system` = a group for a service, not a person) |
+| `sudo snap disable docker && sudo snap enable docker` | Stop and start the Docker snap, so its socket `/var/run/docker.sock` is created with group `docker` |
+| `exec su -l $USER` | Replace this terminal's shell (`exec`) with a fresh login (`su -l`) as you, so the new group is loaded |
+
+> **Why a group?** Docker runs as a root service. Only root and members of `docker` may use its socket.
 
 ✅ **Check:** `docker ps` prints a table header without errors.
 
@@ -297,6 +308,12 @@ cd ~/k8s-eks-projects/05-production-eks/app
 docker compose up --build
 ```
 
+| Part | Meaning |
+|---|---|
+| `docker compose` | Starts several containers together from `docker-compose.yml`: frontend, backend, MySQL, with a shared network |
+| `up` | Create and start them, showing their logs in this terminal |
+| `--build` | Build the frontend and backend images from their Dockerfiles first |
+
 > First run downloads MySQL and builds both images: 2–3 minutes. Wait for `backend listening on :8080` and `DB ready, table 'tasks' exists`.
 
 Open **http://localhost:8081** in your browser and add a task.
@@ -308,6 +325,8 @@ Stop it: press `Ctrl+C`, then:
 ```bash
 docker compose down
 ```
+
+> `down` = stop and **remove** the containers and their network (the images stay).
 
 ---
 
@@ -325,6 +344,12 @@ export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 export ECR=$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
 ```
 
+| Part | Meaning |
+|---|---|
+| `export NAME=value` | Save a variable for this terminal (and programs it starts) |
+| `$(aws sts get-caller-identity --query Account --output text)` | Run the command inside `$( )` and use its output: your 12-digit AWS **account ID** |
+| `$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com` | Your ECR **registry** address (Step 01: one registry, many repositories) |
+
 ```bash
 docker build -t $ECR/prod-backend:v1 ./backend
 ```
@@ -333,11 +358,19 @@ docker build -t $ECR/prod-backend:v1 ./backend
 docker build -t $ECR/prod-frontend:v1 ./frontend
 ```
 
+| Part | Meaning |
+|---|---|
+| `docker build` | Build an image by following the `Dockerfile` |
+| `-t $ECR/prod-backend:v1` | The image's name (**tag**): `<registry>/<repository>:<version>`. Naming it with the ECR address now means `docker push` knows where it goes |
+| `./backend` | The **build context**: the folder whose files the Dockerfile can copy (and where it finds the `Dockerfile`) |
+
 ✅ **Check:**
 
 ```bash
 docker images | grep prod-
 ```
+
+> `docker images` lists images on your laptop; `| grep prod-` keeps only lines containing `prod-`.
 
 > ✅ 2 lines: `prod-backend v1` (~170 MB) and `prod-frontend v1` (~50 MB).
 
@@ -364,12 +397,15 @@ trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 $ECR/prod-fr
 | `--severity HIGH,CRITICAL` | Only show the serious ones |
 | `--ignore-unfixed` | Skip CVEs with no fixed version yet (nothing you can do) |
 | `--exit-code 1` | Return "failed" if any are found. In CI this **stops the pipeline** (Step 10) |
+| `trivy image <name>` | Scan this local image: OS packages (Alpine) **and** app libraries (npm) |
 
 ✅ **Check:** each scan ends with `Total: 0` and no error. Check the exit code:
 
 ```bash
 echo $?
 ```
+
+> `$?` = the exit code of the **last** command (0 = success). Run it right after the scan.
 
 > ✅ `0` = clean. `1` = something found: read the table (library, CVE, fixed version). Usually the fix is to rebuild with a newer base image: `docker pull node:24-alpine` (or `nginxinc/nginx-unprivileged:1.30-alpine`), then repeat Task 4.
 
@@ -385,6 +421,12 @@ echo $?
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR
 ```
 
+| Part | Meaning |
+|---|---|
+| `aws ecr get-login-password` | Ask AWS for a temporary ECR password (valid 12 hours), using your AWS login |
+| `\|` | Pass it straight to the next command, so it never appears on screen or in shell history |
+| `docker login --username AWS --password-stdin $ECR` | Log Docker in to your registry. The user is always `AWS`; `--password-stdin` reads the password from the pipe |
+
 > ✅ `Login Succeeded`
 
 ```bash
@@ -395,11 +437,15 @@ docker push $ECR/prod-backend:v1
 docker push $ECR/prod-frontend:v1
 ```
 
+> `docker push` uploads the image's layers to the repository in its name. Layers ECR already has are skipped.
+
 ✅ **Check:**
 
 ```bash
 aws ecr describe-images --repository-name prod-backend --region us-east-1 --query 'imageDetails[].imageTags' --output text
 ```
+
+> `describe-images` lists the images in a repository. `--query` picks only the tags; `--output text` prints them plainly.
 
 > ✅ `v1`
 
@@ -408,6 +454,8 @@ ECR also scans on push (Step 01 `scan_on_push = true`). After ~1 minute:
 ```bash
 aws ecr describe-image-scan-findings --repository-name prod-backend --image-id imageTag=v1 --region us-east-1 --query 'imageScanFindings.findingSeverityCounts'
 ```
+
+> Reads ECR's own scan result for `prod-backend:v1` and shows only the count per severity.
 
 > ✅ `{}` or only LOW/MEDIUM counts. That's the **second** scan, done by AWS.
 
@@ -425,9 +473,13 @@ aws ecr describe-image-scan-findings --repository-name prod-backend --image-id i
 mkdir -p ~/.cosign && cd ~/.cosign
 ```
 
+> `mkdir -p` = create the folder (no error if it already exists). `~/.cosign` is in your home folder (the `.` hides it), **outside** the Git repo, so the private key can never be committed.
+
 ```bash
 cosign generate-key-pair
 ```
+
+> Creates 2 files in the current folder: `cosign.key` (private, encrypted with your password) and `cosign.pub` (public).
 
 > It asks for a password **twice**: choose one and remember it (it protects the private key).
 
@@ -437,11 +489,15 @@ cosign generate-key-pair
 ls -l ~/.cosign
 ```
 
+> `ls -l` = list files with details (permissions, size, date).
+
 > ✅ `cosign.key` (private 🔒) and `cosign.pub` (public 🔓).
 
 ```bash
 cat ~/.cosign/cosign.pub
 ```
+
+> `cat` prints a file's content. Only ever print the **.pub**, never the `.key`.
 
 > You will paste this public key into the Kyverno policy in Step 07.
 
@@ -463,6 +519,12 @@ BACKEND_DIGEST=$(aws ecr describe-images --repository-name prod-backend --image-
 FRONTEND_DIGEST=$(aws ecr describe-images --repository-name prod-frontend --image-ids imageTag=v1 --region us-east-1 --query 'imageDetails[0].imageDigest' --output text)
 ```
 
+| Part | Meaning |
+|---|---|
+| `BACKEND_DIGEST=$( ... )` | Save the command's output in a variable |
+| `--image-ids imageTag=v1` | The image tagged `v1` |
+| `--query 'imageDetails[0].imageDigest'` | Take only its **digest**: `sha256:...`, the fingerprint of the exact bytes |
+
 ```bash
 echo $BACKEND_DIGEST $FRONTEND_DIGEST
 ```
@@ -479,6 +541,12 @@ cosign sign --yes --key ~/.cosign/cosign.key $ECR/prod-backend@$BACKEND_DIGEST
 cosign sign --yes --key ~/.cosign/cosign.key $ECR/prod-frontend@$FRONTEND_DIGEST
 ```
 
+| Part | Meaning |
+|---|---|
+| `cosign sign` | Create a signature and store it in ECR, next to the image |
+| `--key ~/.cosign/cosign.key` | Sign with **your private** key (it asks for its password) |
+| `$ECR/prod-backend@$BACKEND_DIGEST` | `@sha256:...` = sign the **exact** image, not the movable tag `:v1` |
+
 > `--yes` = don't ask "upload to the public transparency log?". The log (Rekor) stores only the signature record, not your image.
 
 ✅ **Check:** verify with the **public** key:
@@ -486,6 +554,11 @@ cosign sign --yes --key ~/.cosign/cosign.key $ECR/prod-frontend@$FRONTEND_DIGEST
 ```bash
 cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend@$BACKEND_DIGEST > /dev/null
 ```
+
+| Part | Meaning |
+|---|---|
+| `cosign verify --key ~/.cosign/cosign.pub` | Check the signature with the **public** key (this is what Kyverno does in Step 07) |
+| `> /dev/null` | Throw away the long JSON output; the important result line still shows (it goes to the error stream) |
 
 > ✅ `Verification for ... -- The following checks were performed ... The signatures were verified against the specified public key`
 
