@@ -634,49 +634,76 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 
 ---
 
-## 📝 Summary: what we do in Step 02
+## 📝 Summary: what we did in Step 02 ✅ (22 Nov 2026)
 
-**One line:** build the app images on the laptop, scan them (Trivy), push them to private ECR and sign them (Cosign), so the cluster runs only checked, trusted images.
+**One line:** built 2 app images, scanned them twice (Trivy + ECR) and fixed 30+ CVEs down to **0**, pushed them to private ECR with immutable tags, and **signed** them with Cosign.
 
-### Progress
+### Flow
 
-| Task | What | Status |
+```
+💻 laptop
+docker build ──► Trivy scan ──► docker push ──► ECR scan ──► cosign sign ──► cosign verify
+  (Task 4)        (Task 5)        (Task 6)       (Task 6)      (Task 8)        (Task 8)
+                  gate #1                        gate #2       private key 🔒  public key 🔓
+```
+
+### Tasks
+
+| Task | What we did | Status |
 |---|---|---|
-| 1 | Created the `docker` **group** (snap Docker didn't create it) and added my **user** to it, so docker commands run **without sudo** | ✅ 22 Nov |
-| 2 | Installed Trivy 0.76.2 + Cosign v3.1.4 (installed only, not used yet) | ✅ 22 Nov |
-| 3 | Ran the app locally with `docker compose` (frontend + backend + MySQL), saved a task in MySQL | ✅ 22 Nov |
-| 4 | Build `prod-backend:v1` + `prod-frontend:v1` | ✅ 22 Nov |
-| 5 | Trivy scan: **failed first** (backend 6 HIGH, frontend 5 CRITICAL + 15 HIGH) → fixed the Dockerfiles → both **0** | ✅ 22 Nov |
-| 6 | `docker login` to ECR + push. ECR scan **failed first** (backend 1 CRITICAL + 4 HIGH that Trivy rated low) → `apk upgrade` + re-push → both **0** | ✅ 22 Nov |
-| 7 | `cosign generate-key-pair` → `~/.cosign` (outside the repo): `cosign.key` `-rw-------`, `cosign.pub` `-rw-r--r--` | ✅ 22 Nov |
-| 8 | `cosign sign` the digest + `cosign verify`: **401 first** (snap Docker login not visible to cosign) → `cosign login` → both signed + verified | ✅ 22 Nov |
+| 1 | Created the `docker` **group** (snap Docker didn't) and added my **user** to it, so docker runs **without sudo** | ✅ |
+| 2 | Installed Trivy 0.76.2 + Cosign v3.1.4 | ✅ |
+| 3 | Ran the app locally with `docker compose` (frontend + backend + MySQL) | ✅ |
+| 4 | Built `prod-backend:v1` + `prod-frontend:v1` | ✅ |
+| 5 | Trivy scan: failed first → fixed the Dockerfiles → **0** | ✅ |
+| 6 | Pushed to ECR; ECR scan failed first → fixed → **0** | ✅ |
+| 7 | Created the key pair in `~/.cosign` (outside the repo) | ✅ |
+| 8 | Signed both images by **digest** and verified them | ✅ |
+
+### Result
+
+| Image | Trivy | ECR scan | Signed |
+|---|---|---|---|
+| `prod-backend:v1` | 0 | 0 | ✅ |
+| `prod-frontend:v1` | 0 | 0 | ✅ |
 
 ### Where each tool is used
 
-| Tool | Installed | Used in | Job |
+| Tool | Where | Tasks | Job |
 |---|---|---|---|
-| Docker | Laptop | Tasks 3, 4, 6 | Build, run and push images |
-| Trivy | Laptop | Task 5 | Find known vulnerabilities (CVEs) |
-| Cosign | Laptop | Tasks 7, 8 | Sign the image (private key), verify (public key) |
-| AWS CLI | Laptop | Tasks 4, 6, 8 | Account ID, ECR login, image digest |
+| Docker | 💻 Laptop | 3, 4, 6 | Build, run, push |
+| Trivy | 💻 Laptop | 5 | Find CVEs **before** push |
+| Cosign | 💻 Laptop | 7, 8 | Sign (private key), verify (public key) |
+| AWS CLI | 💻 Laptop | 4, 6, 8 | Account ID, ECR login, digest |
+
+### Problems faced → fixed
+
+| # | Problem | Why | Fix |
+|---|---|---|---|
+| 1 | `group 'docker' does not exist` | Snap Docker doesn't create the group | `addgroup --system docker` + `usermod -aG docker $USER` |
+| 2 | Laptop froze on first `compose up --build` | Heavy first build | Hard reboot; fine after. Restart Docker = `sudo snap restart docker` |
+| 3 | Trivy: backend **6 HIGH** | CVEs inside **npm** (comes in the Node base image), not my app | Delete npm/npx/yarn/corepack after `npm ci`: the app runs with `node` only |
+| 4 | Trivy: frontend **5 CRITICAL + 15 HIGH** | nginx 1.30.6 + old Alpine packages; no fixed 1.30 image yet | nginx `1.31-alpine` + `apk upgrade --no-cache` |
+| 5 | ECR: `ScanNotFoundException` | Docker 29 pushed `v1` as an **image index** | `docker build --provenance=false` |
+| 6 | ECR: backend **1 CRITICAL + 4 HIGH**, Trivy said 0 | Same CVEs, different rating: Alpine (low) vs NVD (high) | `apk upgrade --no-cache` in the backend, re-created repos, re-pushed |
+| 7 | `cosign sign`: **401 Unauthorized** | Snap Docker saves the login in its own folder; cosign reads `~/.docker/config.json` | `cosign login` with the ECR password |
 
 ### Manual now → automatic later
 
 | Step | Who signs / checks |
 |---|---|
-| 02 (now) | **You**, by hand on the laptop |
-| 07 | **Kyverno** checks the signature with `cosign.pub` and blocks unsigned images |
+| 02 | **Me**, by hand on the laptop |
+| 07 | **Kyverno** checks the signature with `cosign.pub`, blocks unsigned images |
 | 10 | **GitHub Actions** builds → scans → pushes → signs on every push |
 
-### Problems faced → fixed
+### Remember
 
-| Problem | Fix |
-|---|---|
-| `usermod: group 'docker' does not exist` (Docker is a snap) | `sudo addgroup --system docker` + restart the snap |
-| No `docker.service` to restart | `sudo snap restart docker` |
-| Laptop froze on the first `docker compose up --build` | Hard reboot; worked fine after |
-| Trivy: backend **6 HIGH** in `brace-expansion` + `undici`, inside **npm itself** (`/usr/local/lib/node_modules/npm`), not in my app | npm is only needed to **install**, not to run → `RUN rm -rf` npm/npx/yarn/corepack after `npm ci` → **0** |
-| ECR scan: `ScanNotFoundException` for `imageTag=v1` | Docker 29 pushed `v1` as an **image index** + attestation; ECR scans only the real image inside | Build with `--provenance=false` → `v1` is a plain image, scan by tag works |
-| ECR scan: backend **1 CRITICAL + 4 HIGH** (zlib, openssl) but Trivy said 0 | Same CVEs, different rating: Trivy uses Alpine's (LOW/MEDIUM), ECR uses NVD's | `RUN apk upgrade --no-cache` in the backend → zlib 1.4-r0, openssl 3.5.9-r1 → ECR `{}` |
-| `cosign sign`: `401 Unauthorized` | Snap Docker saved the ECR login in `~/snap/docker/current/.docker/config.json`; cosign reads `~/.docker/config.json` | `aws ecr get-login-password --region us-east-1 \| cosign login --username AWS --password-stdin $ECR` |
-| Trivy: frontend **5 CRITICAL + 15 HIGH** (nginx, curl, brotli). Newest `1.30-alpine` still had nginx 1.30.6 (fix needs 1.30.7) | Switched to nginx mainline `1.31-alpine` + `RUN apk upgrade --no-cache` (as root, then back to `USER 101`) → **0** |
+- ECR repos + signed images **stay** (a few cents/month). Only the cluster is destroyed after each session.
+- Next full `terraform apply` shows **80 to add** (ECR already exists).
+- `cosign.key` + its password: needed again in Step 10. Never push the `.key`.
+
+### Interview one-liners
+
+- **Two scanners:** Trivy before push + ECR after push. ECR caught a CRITICAL that Trivy rated low → defence in depth.
+- **Sign the digest, not the tag:** a tag can move, a digest is the exact image.
+- **Smaller image = fewer CVEs:** remove tools the app doesn't need to run (npm).
