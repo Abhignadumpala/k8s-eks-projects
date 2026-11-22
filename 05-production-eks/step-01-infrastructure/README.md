@@ -1988,5 +1988,57 @@ It's a single admin entry point inside the VPC with the right tool versions. It 
 
 ---
 
+## 📝 Summary: what we built in Step 01
+
+**One line:** a private, production-grade EKS cluster (`abhigna-prod`, v1.36) built with Terraform, with a bastion to manage it and ECR for images.
+
+### Tools: where each one lives
+
+| 💻 Laptop (you install) | 🖥️ Bastion (auto-installed on first boot) |
+|---|---|
+| AWS CLI, Terraform, Git, VS Code | AWS CLI, kubectl 1.36, eksctl, helm |
+| Docker, Trivy, Cosign (for Step 02) | git, jq, curl, unzip |
+| **Job:** build the infra + images | **Job:** manage the private cluster |
+
+### What we built
+
+| # | Piece | Why |
+|---|---|---|
+| 1 | VPC: 3 public + 3 private subnets, NAT | Nodes stay private; only load balancers and the bastion are public |
+| 2 | EKS cluster v1.36 | Standard support (1.33 = extended = 6× cost) |
+| 3 | Bastion host | The only way in to manage the cluster (kubectl/helm) |
+| 4 | `system` node group | Runs cluster tools |
+| 5 | `app` node group + taint `workload=app:NoSchedule` | Only app Pods run here |
+| 6 | Pod Identity agent | Each Pod gets its own IAM role |
+| 7 | IMDS hop limit 1 | Pods can't steal the node's IAM role |
+| 8 | SSM on nodes | No SSH keys or open port 22 |
+| 9 | EBS CSI add-on (own Pod Identity role) | Persistent volumes |
+| 10 | ECR `prod-backend` + `prod-frontend`, immutable tags | Private images; `v1` never changes |
+
+### Flow
+
+```
+aws configure → key pair → git clone → read code → tfvars
+   → terraform init / validate → plan (82) → apply (~20 min)
+   → ssh bastion → kubectl checks ✅ → terraform destroy
+```
+
+### Real result (live run, 21 Nov 2026)
+
+- ✅ 4 nodes Ready (2 system + 2 app), v1.36.5
+- ✅ Taint on app nodes; `eks-pod-identity-agent` + `ebs-csi` Running
+- ✅ Both ECR repos created
+- 💰 ~$0.63/hr → destroyed after testing
+
+### Problems faced → fixed
+
+| Problem | Fix |
+|---|---|
+| EBS CSI add-on stuck in `CREATING` (hop limit 1 blocked the node role) | Gave it its own Pod Identity role |
+| ClusterRoleBinding `forbidden` (created before admin access was ready) | `depends_on = [module.eks]` |
+| `terraform init`: `connection reset by peer` | IPv6 issue → retry or use a hotspot |
+
+---
+
 [⬅ Back to the project overview](../README.md) · Next: [Step 02 — Secure images ➡](../step-02-secure-images/README.md)
 
