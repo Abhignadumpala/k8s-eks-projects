@@ -260,6 +260,17 @@ curl -sSfL -o cosign https://github.com/sigstore/cosign/releases/download/v3.1.4
 sudo install -m 0755 cosign /usr/local/bin/cosign && rm cosign
 ```
 
+| Part | Meaning |
+|---|---|
+| `curl -sfL <url>` | Download the file at `<url>`. `-s` silent, `-f` fail on errors (no error page saved), `-L` follow redirects |
+| `\| sudo sh -s --` | Pipe the downloaded **install script** straight into `sh` (the shell) and run it as root. `-s --` = "read the script from the pipe; what follows are its arguments" |
+| `-b /usr/local/bin v0.76.2` | Script arguments: put the binary in `/usr/local/bin` (a folder in your `PATH`), version `v0.76.2` (pinned) |
+| `curl -sSfL -o cosign <url>` | Download the Cosign **binary** from its GitHub release and save it as `cosign`. `-S` shows an error if it fails |
+| `sudo install -m 0755 cosign /usr/local/bin/cosign` | Copy it into `/usr/local/bin` with permissions `0755` (everyone may run it, only root may change it) |
+| `&& rm cosign` | Only if that worked, delete the downloaded copy |
+
+> ⚠️ Piping a script into `sudo sh` runs it as root. Do it only from the **official** source (here: Aqua Security's own repo), with a pinned version.
+
 ✅ **Check:**
 
 ```bash
