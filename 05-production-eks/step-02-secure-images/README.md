@@ -381,7 +381,7 @@ docker images | grep prod-
 
 > `docker images` lists images on your laptop; `| grep prod-` keeps only lines containing `prod-`.
 
-> ✅ 2 lines: `prod-backend v1` (~170 MB) and `prod-frontend v1` (~50 MB).
+> ✅ 2 lines: `prod-backend v1` (~265 MB on disk, ~66 MB compressed) and `prod-frontend v1` (~110 MB on disk, ~31 MB compressed).
 
 ---
 
@@ -407,6 +407,8 @@ trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 $ECR/prod-fr
 | `--ignore-unfixed` | Skip CVEs with no fixed version yet (nothing you can do) |
 | `--exit-code 1` | Return "failed" if any are found. In CI this **stops the pipeline** (Step 10) |
 | `trivy image <name>` | Scan this local image: OS packages (Alpine) **and** app libraries (npm) |
+
+> 🧪 **Real run (22 Nov 2026):** the first scan **failed**: backend 6 HIGH (in npm itself, not the app), frontend 5 CRITICAL + 15 HIGH (nginx/curl/brotli in the base image). Fixed in the Dockerfiles (remove npm after install; nginx `1.31-alpine` + `apk upgrade`), rebuilt, scanned again → both `0`. The fixes are now in the code, so your scan should pass the first time.
 
 ✅ **Check:** each scan ends with `Total: 0` and no error. Check the exit code:
 
@@ -584,6 +586,8 @@ cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend@$BACKEND_DIGEST > /de
 | `name unknown: The repository with name 'prod-backend' does not exist` | Step 01 infrastructure is destroyed | `terraform apply` (Step 01) |
 | `tag invalid ... already exists` | IMMUTABLE tags: `v1` is taken by a different image | Use a new tag: `v2` |
 | Trivy `exit code 1` | HIGH/CRITICAL CVE with a fix | `docker pull` the newer base image, rebuild (Task 4) |
+| Trivy finds CVEs under `usr/local/lib/node_modules/npm/...` | They are in **npm**, which ships inside the Node base image | Delete npm/npx/yarn/corepack after `npm ci` (see `app/backend/Dockerfile`): the app runs with `node` only |
+| Newest base image still has a CVE in nginx | That nginx version isn't released in the stable tag yet | Use a newer line (`1.31-alpine` mainline) and `apk upgrade --no-cache` |
 | `cosign: ... UNAUTHORIZED` | Cosign uses Docker's login | Repeat the `docker login` (Task 6) |
 | `cosign sign` error about an existing tag `sha256-....sig` | Signing the same digest twice in an IMMUTABLE repo (old signature format) | It is already signed: run `cosign verify` |
 
@@ -625,8 +629,8 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 | 1 | Created the `docker` **group** (snap Docker didn't create it) and added my **user** to it, so docker commands run **without sudo** | ✅ 22 Nov |
 | 2 | Installed Trivy 0.76.2 + Cosign v3.1.4 (installed only, not used yet) | ✅ 22 Nov |
 | 3 | Ran the app locally with `docker compose` (frontend + backend + MySQL), saved a task in MySQL | ✅ 22 Nov |
-| 4 | Build `prod-backend:v1` + `prod-frontend:v1` | ⏳ |
-| 5 | Trivy scan (stop on HIGH/CRITICAL with a fix) | ⏳ |
+| 4 | Build `prod-backend:v1` + `prod-frontend:v1` | ✅ 22 Nov |
+| 5 | Trivy scan: **failed first** (backend 6 HIGH, frontend 5 CRITICAL + 15 HIGH) → fixed the Dockerfiles → both **0** | ✅ 22 Nov |
 | 6 | `docker login` to ECR + push | ⏳ |
 | 7 | `cosign generate-key-pair` → `~/.cosign` (outside the repo) | ⏳ |
 | 8 | `cosign sign` the digest + `cosign verify` | ⏳ |
@@ -655,3 +659,5 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 | `usermod: group 'docker' does not exist` (Docker is a snap) | `sudo addgroup --system docker` + restart the snap |
 | No `docker.service` to restart | `sudo snap restart docker` |
 | Laptop froze on the first `docker compose up --build` | Hard reboot; worked fine after |
+| Trivy: backend **6 HIGH** in `brace-expansion` + `undici`, inside **npm itself** (`/usr/local/lib/node_modules/npm`), not in my app | npm is only needed to **install**, not to run → `RUN rm -rf` npm/npx/yarn/corepack after `npm ci` → **0** |
+| Trivy: frontend **5 CRITICAL + 15 HIGH** (nginx, curl, brotli). Newest `1.30-alpine` still had nginx 1.30.6 (fix needs 1.30.7) | Switched to nginx mainline `1.31-alpine` + `RUN apk upgrade --no-cache` (as root, then back to `USER 101`) → **0** |

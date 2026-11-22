@@ -4,7 +4,12 @@
 #   - works with a read-only root filesystem (Kubernetes mounts /tmp and
 #     /etc/nginx/conf.d as small writable folders)
 # ───────────────────────────────────────────────
-FROM nginxinc/nginx-unprivileged:1.30-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
+
+# Get the latest Alpine security fixes, then go back to the non-root user
+USER root
+RUN apk upgrade --no-cache
+USER 101
 
 # Default backend address. In Kubernetes the Helm chart sets it.
 ENV BACKEND_URL=http://backend:8080

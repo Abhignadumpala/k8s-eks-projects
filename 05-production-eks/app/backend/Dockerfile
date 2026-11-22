@@ -14,6 +14,9 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY server.js ./
 
+# Remove npm, npx, yarn, corepack: needed to install, not to run (they bring CVEs)
+RUN rm -rf /usr/local/lib/node_modules /opt/yarn-* /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/corepack
+
 USER node
 
 ENV PORT=8080
