@@ -218,11 +218,23 @@ Works (prints a table, maybe empty)? Go to Task 2. Permission denied? Run:
 sudo usermod -aG docker $USER
 ```
 
+> `usermod: group 'docker' does not exist`? Docker was installed as a **snap** (`which docker` → `/snap/bin/docker`), which doesn't create the group. Create it and restart Docker:
+>
+> ```bash
+> sudo addgroup --system docker && sudo usermod -aG docker $USER
+> ```
+>
+> ```bash
+> sudo snap disable docker && sudo snap enable docker
+> ```
+
+Apply the new group in this terminal (asks your laptop password):
+
 ```bash
-newgrp docker
+exec su -l $USER
 ```
 
-> `newgrp` applies the new group in this terminal. In other terminals: log out and back in once.
+> Other terminals: log out of Ubuntu and back in once. (`newgrp docker` also works if it's installed.)
 
 ✅ **Check:** `docker ps` prints a table header without errors.
 
