@@ -700,7 +700,7 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 
 ## 📝 Summary: what we did in Step 02 ✅
 
-**One line:** built 2 app images, scanned them twice (Trivy + ECR) and fixed 30+ CVEs down to **0**, pushed them to private ECR with immutable tags, and **signed** them with Cosign.
+**One line:** built 2 app images, scanned them twice (Trivy + ECR) to **0** HIGH/CRITICAL, pushed them to private ECR with immutable tags, and **signed** them with Cosign.
 
 ### Flow
 
@@ -723,8 +723,8 @@ docker build ──► Trivy scan ──► docker push ──► ECR scan ─�
 | 2 | Installed Trivy 0.76.2 + Cosign v3.1.4 | ✅ |
 | 3 | Ran the app locally with `docker compose` (frontend + backend + MySQL) | ✅ |
 | 4 | Built `prod-backend:v1` + `prod-frontend:v1` | ✅ |
-| 5 | Trivy scan: failed first → fixed the Dockerfiles → **0** | ✅ |
-| 6 | Pushed to ECR; ECR scan failed first → fixed → **0** | ✅ |
+| 5 | Scanned both images with Trivy → **0** HIGH/CRITICAL | ✅ |
+| 6 | Pushed to ECR (immutable tags); ECR scan on push → **0** | ✅ |
 | 7 | Created the key pair in `~/.cosign` (outside the repo) | ✅ |
 | 8 | Signed both images by **digest** and verified them | ✅ |
 
@@ -744,19 +744,9 @@ docker build ──► Trivy scan ──► docker push ──► ECR scan ─�
 | Cosign | 💻 Laptop | 7, 8 | Sign (private key), verify (public key) |
 | AWS CLI | 💻 Laptop | 4, 6, 8 | Account ID, ECR login, digest |
 
-### Problems faced → fixed
+### Troubleshooting
 
-| # | Problem | Fix |
-|---|---|---|
-| 1 | `docker` group missing (snap Docker) | Created the group, added my user |
-| 2 | Laptop froze on first build | Reboot; `sudo snap restart docker` |
-| 3 | Trivy: CVEs inside npm | Removed npm from the image |
-| 4 | Trivy: CVEs in nginx/curl/brotli | nginx `1.31-alpine` + `apk upgrade` |
-| 5 | ECR `ScanNotFoundException` | `--provenance=false` |
-| 6 | ECR CRITICAL that Trivy rated low | `apk upgrade` in backend, re-push |
-| 7 | `cosign sign` 401 | `cosign login` |
-
-Full details (error, why, fix, commands): **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)**
+Errors I hit during this step and how I fixed them: **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)**
 
 ### Manual now → automatic later
 
