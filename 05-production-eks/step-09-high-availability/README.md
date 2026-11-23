@@ -30,6 +30,14 @@ users ───────────────────► HPA: 2 → 6 
 
 ### The 5 tools of high availability
 
+**Definition:** **high availability (HA)** = the app **keeps working** when something breaks: a Pod crashes, a node dies, an AZ goes down, or traffic suddenly doubles.
+
+- Never have **only 1** of anything (1 Pod, 1 node, 1 AZ) = no **single point of failure**.
+- Spread the copies so **one failure** can't take them all.
+- **Add more** automatically when traffic grows.
+
+**Analogy 🍔:** a restaurant with several cooks (replicas) in different kitchens (AZs), a manager who checks each cook is OK (probes), and who calls in extra cooks at lunch time (HPA) and opens extra kitchens when needed (Karpenter).
+
 | Tool | Protects against | Already in the chart? |
 |---|---|---|
 | **Replicas ≥ 2** | One Pod crashing | ✅ since Step 03 |
@@ -39,7 +47,13 @@ users ───────────────────► HPA: 2 → 6 
 | **HPA** | Too few Pods for the traffic | ➕ turned on in this step |
 | **Karpenter** | Too few **nodes** for the Pods | ➕ installed in this step |
 
+> **Interview one-liner:** "For HA we run at least 2 replicas spread across AZs and nodes, with probes and PDBs, and autoscale Pods with HPA and nodes with Karpenter."
+
 ### Probes (recap)
+
+**Definition:** a **probe** is a health check that the **kubelet** (the Kubernetes agent on each node) runs against a container every few seconds.
+
+**Analogy 🩺:** readiness = *"are you ready to take customers?"* (if not, the waiter skips you). Liveness = *"are you awake?"* (if not, you get woken up = restarted).
 
 | Probe | Question | If it fails |
 |---|---|---|
@@ -50,6 +64,17 @@ users ───────────────────► HPA: 2 → 6 
 > Liveness must **not** check the database: if MySQL is down, restarting the backend won't fix it and only causes a restart storm.
 
 ### Topology spread
+
+**Definition:** **topology spread** tells the scheduler to put the copies of a Pod in **different AZs and different nodes**, so one failure can't take them all.
+
+**Analogy 🥚:** don't put all your eggs in one basket.
+
+```
+❌ No spread                       ✅ Spread (our setup)
+us-east-1a: backend, backend       us-east-1a: backend
+us-east-1b: —                      us-east-1b: backend
+→ 1a down = app down               → 1a down = 1b still serves
+```
 
 ```yaml
 topologySpreadConstraints:
@@ -69,7 +94,18 @@ topologySpreadConstraints:
 
 ### PodDisruptionBudget
 
-**Definition:** a promise for **voluntary** disruptions (node drain, upgrade, Karpenter consolidation): *"never take down more than 1 frontend Pod at a time"*.
+**Definition:** a **PodDisruptionBudget (PDB)** is a promise for **planned** (voluntary) disruptions (node drain, upgrade, Karpenter consolidation): *"never take down more than 1 frontend Pod at a time"*.
+
+- During a **node drain**, Kubernetes evicts Pods **one by one**.
+- Before each eviction, it checks the PDB: *"would this break the promise?"*
+- If yes, it **waits** until the replacement Pod is ready.
+
+**Analogy 👮:** road works close **one lane at a time**, never the whole road.
+
+```
+drain node-1 ──► evict frontend-a ──► PDB: 1 of 2 down, OK ✅
+             ──► evict frontend-b ──► PDB: wait ⏳ until frontend-a's replacement is Ready
+```
 
 ```yaml
 apiVersion: policy/v1
@@ -83,9 +119,22 @@ spec:
 
 It does **not** protect against crashes or a dead node (involuntary): replicas and spreading do that.
 
+| Disruption | Example | Protected by |
+|---|---|---|
+| **Voluntary** (planned) | Drain, upgrade, Karpenter consolidation | **PDB** ✅ |
+| **Involuntary** (accident) | Node crash, AZ outage | Replicas + topology spread |
+
+> **Interview one-liner:** "A PDB limits how many Pods can be down during planned maintenance like a drain; crashes are handled by replicas and spreading."
+
 ### HPA (Horizontal Pod Autoscaler)
 
-Adds or removes **Pods** based on usage.
+**Definition:** the **HPA** adds or removes **Pods** automatically based on usage (usually CPU %).
+
+- It reads CPU usage from **metrics-server** every 15 s.
+- CPU **above** the target → **more** Pods. CPU **below** → fewer (after a wait).
+- "Horizontal" = **more copies**. ("Vertical" would be a **bigger** Pod.)
+
+**Analogy 🛒:** a supermarket opens more checkout lanes when the queue gets long, and closes them when it's quiet.
 
 ```
 desired = current Pods × (current CPU % ÷ target CPU %)
@@ -100,9 +149,22 @@ desired = current Pods × (current CPU % ÷ target CPU %)
 
 HPA needs **metrics-server** (reads CPU/memory from every kubelet).
 
+> **Interview one-liner:** "HPA scales Pod replicas on CPU relative to the request, so requests are mandatory and metrics-server must be installed."
+
 ### Karpenter
 
-Adds or removes **nodes**. It watches for Pods that are **Pending** because nothing fits, and launches the **cheapest EC2 instance** that fits them, often in under a minute.
+**Definition:** **Karpenter** adds or removes **nodes** (EC2 servers) automatically.
+
+- HPA adds Pods, but if **no node has room**, the new Pods stay **Pending**.
+- Karpenter sees the Pending Pods and launches the **cheapest EC2 instance that fits them**, often in under a minute.
+- When nodes become empty or half-empty, it **removes** them to save money.
+
+**Analogy 🅿️:** HPA brings more cars; Karpenter **opens a new parking floor** when the car park is full, and closes floors that are empty.
+
+```
+HPA: 2 → 6 Pods ──► 4 Pods Pending (no room) ──► Karpenter launches 1 EC2 ──► Pods Running ✅
+traffic drops    ──► node empty               ──► Karpenter deletes the EC2 ──► 💰 saved
+```
 
 | | Cluster Autoscaler (older) | **Karpenter** ✅ |
 |---|---|---|
@@ -118,6 +180,18 @@ Adds or removes **nodes**. It watches for Pods that are **Pending** because noth
 | **NodeClaim** | One node Karpenter created (like a receipt) |
 
 **Spot instances:** spare AWS capacity, **up to ~70–90% cheaper**, but AWS can take them back with a **2-minute warning**. Karpenter receives that warning through **SQS** (Terraform creates the queue and EventBridge rules) and drains the node in time.
+
+```
+AWS: "taking this Spot node in 2 min" ──EventBridge──► SQS queue ──► Karpenter ──► drains node, starts a new one
+```
+
+| | On-Demand | **Spot** |
+|---|---|---|
+| Price | Full | Up to ~70–90% cheaper ✅ |
+| Can be taken back | No ✅ | Yes, 2-min warning ❌ |
+| Good for | Databases, system nodes | Stateless apps with ≥ 2 replicas |
+
+> **Interview one-liner:** "Karpenter provisions right-sized nodes for Pending Pods in about a minute, mixes Spot and On-Demand, and consolidates to cut cost; Spot interruptions come through SQS so it drains in time."
 
 ### Who scales what
 
