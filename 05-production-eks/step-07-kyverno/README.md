@@ -33,7 +33,16 @@ kubectl / Helm / Argo CD ──► API server ──► Kyverno admission webhoo
 
 ### What is Kyverno?
 
-**Definition:** a **policy engine** for Kubernetes. It runs as an **admission webhook**: the API server asks Kyverno *"may I create this?"* before saving anything.
+**Definition:** **Kyverno** is a **policy engine** for Kubernetes: it checks every new object against **your company's rules** before Kubernetes saves it.
+
+- You `kubectl apply` a Pod → the **API server** pauses and asks Kyverno *"may I create this?"* (this is called an **admission webhook**).
+- Kyverno checks the rules: right registry? no `:latest`? signed image?
+- **Yes** → the Pod is created. **No** → `kubectl` shows an error and nothing is created.
+
+```
+kubectl apply ──► API server ──"may I?"──► Kyverno 🛂 ──✅──► Pod saved, starts
+                                                     └─❌──► "image must come from our ECR"
+```
 
 **Analogy 🛂:** airport security. Pod Security Admission (Step 05) checks for dangerous items (root, privileged). Kyverno checks **your company's rules**: right passport (registry), a valid ticket (signature), proper luggage label (resources).
 
@@ -44,9 +53,13 @@ kubectl / Helm / Argo CD ──► API server ──► Kyverno admission webhoo
 | **Generate** (create extra objects) | A NetworkPolicy for every new namespace |
 | **Verify images** | Check Cosign signatures |
 
+> **Interview one-liner:** "Kyverno is an admission controller that validates, mutates and generates Kubernetes objects and verifies image signatures, so only workloads that follow our rules can run."
+
 ### Kyverno 1.20 policy types (CEL)
 
-Kyverno now uses **CEL** (Common Expression Language), the same language Kubernetes uses for its own built-in rules. The old `ClusterPolicy` kind is **deprecated**, so we use the new types:
+**Definition:** **CEL (Common Expression Language)** is a small language for writing **true / false tests**, like `image starts with our ECR`.
+
+Kyverno now uses **CEL**, the same language Kubernetes uses for its own built-in rules. The old `ClusterPolicy` kind is **deprecated**, so we use the new types:
 
 | Kind | Used for | Example | In this project |
 |---|---|---|---|
@@ -71,7 +84,16 @@ All use `apiVersion: policies.kyverno.io/v1`. Most also have a **namespaced** va
 
 ### Autogen: rules for Pods also protect Deployments
 
-We write rules for **Pods**. Kyverno automatically creates matching rules for Deployments, StatefulSets and so on (it looks at `spec.template.spec`). A bad Deployment is refused **immediately**, instead of creating a Deployment whose Pods silently never start.
+**Definition:** **autogen** = Kyverno **automatically copies** a rule written for Pods to Deployments, StatefulSets, Jobs… (it checks their `spec.template.spec`).
+
+- We write rules for **Pods** only.
+- A bad **Deployment** is then refused **immediately**, with a clear error.
+- Without autogen, the Deployment would be created but its Pods would **silently never start**.
+
+```
+Without autogen:  Deployment ✅ created ──► ReplicaSet ──► Pod ❌ refused (you see nothing, 0/2 ready)
+With autogen:     Deployment ❌ refused right away with the error message ✅
+```
 
 ### Pod Identity vs Kyverno: two different layers
 
@@ -80,11 +102,17 @@ We write rules for **Pods**. Kyverno automatically creates matching rules for De
 | **Pod Identity / IRSA** (Step 06) | What an approved Pod may do **in AWS** | *"May this Pod read that bucket?"* |
 | **Kyverno** (this step) | Which objects may be **created in Kubernetes**, and how they must look | *"May this Pod even run, with this image and these settings?"* |
 
+**Analogy 🏢:** Kyverno is the **building's front door** (who may come in). Pod Identity is the **key card inside** (which rooms you may open). You need both.
+
 **Real risk that needs both:** a developer runs a debug image from Docker Hub in `payments`, using a ServiceAccount with a powerful AWS role. Code inside that image (or a compromised package) can now use the role. Pod Identity alone can't stop it, because the Pod *is* allowed that role; Kyverno blocks the untrusted image. Neither replaces the other.
 
 > **Key takeaway:** *Pod Identity decides what a Pod can do in AWS. Kyverno decides which workloads are allowed to run and what guardrails they must satisfy.*
 
 ### Audit vs Deny, and a safe rollout
+
+**Definition:** **Audit** = only **report** bad Pods. **Deny** = **block** them.
+
+**Analogy 🚦:** Audit is a **speed camera that only warns** in the first month; Deny is the **real fine**. You warn first so nobody is surprised.
 
 | `validationActions` | What happens to a bad Pod |
 |---|---|
@@ -108,6 +136,8 @@ Never switch a **new** policy straight to `Deny` in production. You could break 
 
 Task 7 practises steps 1, 2, 3 and 5.
 
+> **Interview one-liner:** "We roll out a new policy in Audit mode, check PolicyReports, fix or add narrow exceptions, then switch to Deny in staging before production."
+
 ### What these rules can NOT do
 
 | Limitation | So also… |
@@ -130,7 +160,11 @@ Task 7 practises steps 1, 2, 3 and 5.
 
 ### Where is the account ID?
 
-`restrict-registries.yaml` contains `${ACCOUNT_ID}`. You apply it with **`envsubst`**, which replaces the variable with your value on the bastion. So Git never holds your account ID.
+**Definition:** **`envsubst`** is a Linux command that **fills in** `${VARIABLES}` in a file with their real values, on the fly.
+
+- `restrict-registries.yaml` in Git contains `${ACCOUNT_ID}`, **not** your real number.
+- On the bastion, `envsubst` replaces it with your account ID, then pipes the result to `kubectl apply`.
+- So Git **never** holds your account ID.
 
 ```bash
 envsubst '${ACCOUNT_ID}' < restrict-registries.yaml | kubectl apply -f -
@@ -138,7 +172,13 @@ envsubst '${ACCOUNT_ID}' < restrict-registries.yaml | kubectl apply -f -
 
 ### How does Kyverno read signatures from private ECR?
 
-It needs ECR read access → **its own Pod Identity role** (Terraform `enable_kyverno_ecr`), limited to our 2 repositories. In the policy, `credentials.providers: [amazon]` tells Kyverno to use the AWS credentials.
+- To check a signature, Kyverno must **download** it from our **private ECR**.
+- That needs ECR read access → **its own Pod Identity role** (Terraform `enable_kyverno_ecr`), limited to our 2 repositories (least privilege, like Step 06).
+- In the policy, `credentials.providers: [amazon]` tells Kyverno to use those AWS credentials.
+
+```
+Kyverno ──Pod Identity role──► ECR (prod-backend, prod-frontend) ──► reads signature ──► checks with cosign.pub
+```
 
 ## 1.2 The code, file by file (`platform/policies/`)
 
