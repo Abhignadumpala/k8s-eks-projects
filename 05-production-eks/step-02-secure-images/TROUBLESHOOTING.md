@@ -74,6 +74,8 @@ usr/local/lib/node_modules/npm/node_modules/undici            HIGH  (4)
 RUN rm -rf /usr/local/lib/node_modules /opt/yarn-* /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/corepack
 ```
 
+**Better fix (now in the Dockerfile):** a **multi-stage build**. Stage 1 runs `npm ci`; stage 2 (`alpine:3.24`) copies only the `node` binary and `/app`, so npm is never in the shipped image. 0 HIGH/CRITICAL, 274 MB → 225 MB.
+
 **Result:** backend Trivy → `0`.
 
 > Lesson: fewer tools in the image = fewer CVEs.

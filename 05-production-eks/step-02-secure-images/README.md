@@ -65,6 +65,27 @@ Think of a **restaurant 🍽️**: the cooking can be perfect, but if the vegeta
 | **ECR** | Private image registry in your AWS account | Locked warehouse |
 | **Cosign** | Signs an image with your private key; anyone with the public key can verify it | A wax seal on the box |
 
+### ECR vs Docker Hub
+
+**Definition:** both are **image registries** (places to store and pull container images). **ECR** is AWS's private registry inside your account; **Docker Hub** is Docker's public registry.
+
+| | **ECR** (AWS) | **Docker Hub** |
+|---|---|---|
+| What | Private registry in your AWS account | Public registry run by Docker |
+| Default visibility | Private | Public (private repos limited/paid) |
+| Login / access | IAM roles + policies | Docker Hub username + token |
+| EKS pulls images | Node IAM role, no password stored | Needs `imagePullSecret` for private images |
+| Network | Same AWS region → fast, cheap | Over the internet, pull rate limits |
+| Scanning | Built in (scan on push) | Docker Scout (more features paid) |
+| Used for | Your company's own app images | Public base images (`node`, `nginx`, `mysql`) |
+
+```
+Docker Hub ──(FROM node / nginx)──► 💻 docker build ──► Trivy ──► push ──► ECR ──► EKS pulls
+ base images                                                              our images
+```
+
+> **Interview one-liner:** "We use ECR instead of Docker Hub because it's private, IAM-controlled, and in the same region as EKS."
+
 ### CVE, severity and "fixed version"
 
 **CVE** = a public ID for one known security bug, e.g. `CVE-2026-12345`.
@@ -109,22 +130,47 @@ All app code is in [`../app`](../app).
 
 ### `app/backend/Dockerfile`
 
-```dockerfile
-FROM node:24-alpine
+**Multi-stage build** = 2 `FROM` lines in one Dockerfile. Stage 1 **installs** (has npm), stage 2 is what we **ship** (no npm). Only what we `COPY --from=build` reaches stage 2.
 
-# Get the latest Alpine security fixes (openssl, zlib...)
-RUN apk upgrade --no-cache
+```
+Stage 1: build (has npm) ──COPY node + /app──► Stage 2: run (no npm) ← shipped
+```
+
+```dockerfile
+# ───────────────────────────────────────────────
+# Backend image: Node.js API (multi-stage build)
+#   Stage 1 "build": node image WITH npm → installs libraries into /app/node_modules
+#   Stage 2 "run":   plain Alpine + only the node binary → NO npm/npx/yarn/corepack
+#   - only production dependencies
+#   - runs as user "node" (uid 1000), never root
+# ───────────────────────────────────────────────
+
+# ---------- Stage 1: build (thrown away after the build) ----------
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
 # Copy only the package files first → this layer is cached until dependencies change
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev
 
 COPY server.js ./
 
-# Remove npm, npx, yarn, corepack: needed to install, not to run (they bring CVEs)
-RUN rm -rf /usr/local/lib/node_modules /opt/yarn-* /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/corepack
+# ---------- Stage 2: run (this is the image we ship) ----------
+# Same Alpine version as node:24-alpine, so the copied node binary works
+FROM alpine:3.24
+
+# Security fixes + the C++ library node needs + user "node" (uid 1000)
+RUN apk upgrade --no-cache \
+ && apk add --no-cache libstdc++ \
+ && addgroup -g 1000 node \
+ && adduser -u 1000 -G node -s /sbin/nologin -D node
+
+# Take only what the app needs from stage 1: the node binary and /app
+COPY --from=build /usr/local/bin/node /usr/local/bin/node
+
+WORKDIR /app
+COPY --from=build --chown=node:node /app /app
 
 USER node
 
@@ -136,14 +182,23 @@ CMD ["node", "server.js"]
 
 | Line | Explained |
 |---|---|
-| `FROM node:24-alpine` | Node.js **24 LTS** (supported until 2028) on **Alpine** Linux: a tiny base = fewer packages = fewer CVEs |
-| `RUN apk upgrade --no-cache` | Update Alpine packages to their patched versions (the base image can be weeks old). Runs as root, before `USER node` |
-| `COPY package.json package-lock.json ./` | Dependencies first: Docker caches this layer, so rebuilding after a code change is fast |
-| `npm ci --omit=dev` | Installs **exactly** the versions in the lock file, **without** test/dev tools |
-| `npm cache clean --force` | Removes the download cache: smaller image |
-| `RUN rm -rf ... npm ...` | Deletes npm/npx/yarn/corepack. They are needed only to **install**; the app **runs** with `node` alone. Fewer tools = fewer CVEs. Your app's libraries in `/app/node_modules` stay |
-| `USER node` | Runs as user `node` (uid 1000), **not root** |
-| `EXPOSE 8080` | Port above 1024: a non-root user is allowed to open it |
+| `FROM node:24-alpine AS build` | Stage 1: Node 24 with npm, named `build` |
+| `npm ci --omit=dev` | Installs exact lock-file versions, no dev tools |
+| `FROM alpine:3.24` | Stage 2: plain Alpine, **no npm** (same version as the node image) |
+| `apk upgrade` / `apk add libstdc++` | Security fixes + library `node` needs |
+| `adduser -u 1000` | User `node`, uid 1000 (matches Helm in Step 05) |
+| `COPY --from=build ...` | Take only the `node` binary and `/app` |
+| `USER node` | Run as non-root |
+
+| | Single-stage + `rm -rf npm` | Multi-stage |
+|---|---|---|
+| npm | Hidden in a layer, still there | Never copied |
+| Size | 274 MB | **225 MB (−18%)** |
+| Trivy HIGH/CRITICAL | 0 | 0 |
+
+> Tried distroless: 1 CRITICAL + 7 HIGH (old OpenSSL) and no shell → kept Alpine (0 CVEs).
+
+> **Interview one-liner:** "Multi-stage keeps build tools out of the runtime image: stage 1 runs `npm ci`, stage 2 copies only node and the app. Smaller image, fewer CVEs."
 
 ### `app/frontend/Dockerfile`
 
@@ -601,8 +656,6 @@ cosign verify --key ~/.cosign/cosign.pub $ECR/prod-backend@$BACKEND_DIGEST > /de
 
 🎉 **Step 02 is done.** Two scanned, signed images are in ECR.
 
-> Keep the ECR repos (a few cents/month): Step 03 pulls these images and Step 07 checks these signatures.
-
 ---
 
 ## Troubleshooting
@@ -636,7 +689,7 @@ No. A signature proves **who** built the image and that it is **unchanged**; a s
 
 ---
 
-## 📝 Summary: what we did in Step 02 ✅ (22 Nov 2026)
+## 📝 Summary: what we did in Step 02 ✅
 
 **One line:** built 2 app images, scanned them twice (Trivy + ECR) and fixed 30+ CVEs down to **0**, pushed them to private ECR with immutable tags, and **signed** them with Cosign.
 
@@ -648,6 +701,10 @@ docker build ──► Trivy scan ──► docker push ──► ECR scan ─�
   (Task 4)        (Task 5)        (Task 6)       (Task 6)      (Task 8)        (Task 8)
                   gate #1                        gate #2       private key 🔒  public key 🔓
 ```
+
+- **Gate #1 (Trivy, before the push):** catches a bad image **before it reaches any registry**. If Trivy finds HIGH/CRITICAL, you don't push.
+- **Gate #2 (ECR scan, after the push):** a **second opinion** from AWS with its own vulnerability database. Also covers someone pushing **without** running Trivy.
+- We pushed to **ECR, not Docker Hub**. Docker Hub was only where the **base images** came from (`FROM node:...`, `FROM nginx:...`).
 
 ### Tasks
 
@@ -700,14 +757,9 @@ Full details (error, why, fix, commands): **[TROUBLESHOOTING.md](./TROUBLESHOOTI
 | 07 | **Kyverno** checks the signature with `cosign.pub`, blocks unsigned images |
 | 10 | **GitHub Actions** builds → scans → pushes → signs on every push |
 
-### Remember
-
-- ECR repos + signed images **stay** (a few cents/month). Only the cluster is destroyed after each session.
-- Next full `terraform apply` shows **80 to add** (ECR already exists).
-- `cosign.key` + its password: needed again in Step 10. Never push the `.key`.
-
 ### Interview one-liners
 
 - **Two scanners:** Trivy before push + ECR after push. ECR caught a CRITICAL that Trivy rated low → defence in depth.
 - **Sign the digest, not the tag:** a tag can move, a digest is the exact image.
-- **Smaller image = fewer CVEs:** remove tools the app doesn't need to run (npm).
+- **Smaller image = fewer CVEs:** remove tools the app doesn't need to run (npm), using a **multi-stage build** so npm never reaches the shipped image.
+- **Scan before push + ECR not Docker Hub:** "We scan with Trivy before the push so a bad image never reaches the registry, and ECR scan on push is a second gate. We use ECR instead of Docker Hub because it's private, IAM-controlled, and in the same region as EKS."
