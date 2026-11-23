@@ -36,7 +36,22 @@ ALB (public subnets)   ◄── created by the AWS Load Balancer Controller (sy
 
 ### What is Helm?
 
-**Definition:** the package manager for Kubernetes. A **chart** is a folder of YAML templates with blanks, plus a `values.yaml` that fills the blanks.
+**Definition:** **Helm** is the **package manager for Kubernetes**. Like `apt` or `yum` for Linux, but it installs whole apps into a cluster.
+
+- Our app needs **12 template files** (Deployments, Services, Ingress, StatefulSet…).
+- Without Helm you `kubectl apply` each file and edit values by hand in many places.
+- With Helm you install **all of them with one command**, and change settings in **one file** (`values.yaml`).
+
+**Analogy 🍰:** the **chart** is a cake recipe with blanks ("___ eggs"), the **values** are the amounts you choose, and the **release** is the cake you baked.
+
+```
+helm/three-tier/  (chart)        values.yaml            helm install
+┌──────────────────────┐        ┌────────────────┐     ┌──────────────────────┐
+│ templates/*.yaml     │   +    │ replicas: 2    │ ──► │ release "three-tier" │
+│ replicas: {{ ___ }}  │        │ image: v1      │     │ running in the cluster│
+└──────────────────────┘        └────────────────┘     └──────────────────────┘
+   recipe with blanks             your amounts            the baked cake 🎂
+```
 
 | Word | Meaning | Example |
 |---|---|---|
@@ -45,7 +60,14 @@ ALB (public subnets)   ◄── created by the AWS Load Balancer Controller (sy
 | **Release** | One installed copy of a chart | `three-tier` in namespace `three-tier` |
 | **`helm upgrade --reuse-values --set x=y`** | Change one setting, keep the others | Turn on a feature in a later step |
 
-**Analogy 🍰:** the chart is a cake recipe with blanks ("___ eggs"), values are the amounts you choose, a release is the cake you baked.
+| | Plain `kubectl apply` | **Helm** |
+|---|---|---|
+| Install 12 files | Apply each one (or a folder) | 1 command ✅ |
+| Change replicas / image | Edit YAML in many places ❌ | One value ✅ |
+| Undo a bad change | Find old files by hand ❌ | `helm rollback` ✅ |
+| Same app for dev + prod | Copy all files ❌ | Same chart, different values ✅ |
+
+> **Interview one-liner:** "Helm packages Kubernetes YAML into a chart with templates and values, so we install, upgrade and roll back the whole app with one command."
 
 ### The AWS Load Balancer Controller
 
@@ -71,15 +93,47 @@ You write Ingress ──► Controller sees it ──► asks AWS ──► ALB 
 
 > **Interview one-liner:** "An Ingress is just a rule; the AWS Load Balancer Controller watches Ingresses and creates the ALB in AWS."
 
+#### Our ALB settings
+
 | Setting | Our value | Why |
 |---|---|---|
 | `scheme: internet-facing` | Public ALB | Users on the internet reach the app. It lands in the **public** subnets (tag `kubernetes.io/role/elb`, Step 01) |
 | `target-type: ip` | Pod IPs | The ALB talks straight to the Pods (no extra node hop) |
 | `healthcheck-path: /healthz` | nginx answers `ok` | The ALB sends traffic only to healthy Pods |
 
-**Why does the controller need `--set vpcId`?** It would normally ask the node's metadata service (IMDS) for the VPC. We blocked Pods from IMDS (hop limit 1, Step 01), so we tell it directly. That's the price of the security setting, and it's normal in production.
+**`target-type: ip` vs `instance`:**
+
+```
+instance:  ALB ──► node:30080 (NodePort) ──► kube-proxy ──► Pod     (2 hops)
+ip:        ALB ─────────────────────────────────────────► Pod IP    (1 hop) ✅
+```
+
+#### Why the controller needs `--set vpcId`
+
+**IMDS (Instance Metadata Service)** = a small web address on every EC2 server (`169.254.169.254`) that answers "which VPC am I in? what are my AWS keys?".
+
+- Normally the controller **asks IMDS** "which VPC am I in?".
+- In Step 01 we **blocked Pods from IMDS** (hop limit 1), so a hacked Pod can't steal the node's AWS keys.
+- So the controller can't ask anymore → we **tell it the VPC ID** directly with `--set vpcId`.
+
+**Analogy 🏨:** IMDS is the hotel front desk. We locked the desk so guests (Pods) can't grab the master key, so we hand the controller its room number ourselves.
+
+| | IMDS open to Pods | **IMDS blocked (our setup)** |
+|---|---|---|
+| Controller finds VPC | Asks IMDS by itself | We pass `--set vpcId` |
+| Hacked Pod steals node's AWS keys | Possible ❌ | Blocked ✅ |
+
+> **Interview one-liner:** "We block Pods from IMDS so they can't steal the node's IAM credentials; the LB Controller then needs the VPC ID passed in, which is normal in hardened clusters."
 
 ### Storage: StorageClass → PVC → PV → EBS
+
+**Definition:** a Pod's own files are **deleted when the Pod dies**. MySQL needs a disk that **survives restarts**. Kubernetes gets one from AWS (an **EBS volume**) through 3 objects.
+
+- **StorageClass** = the menu: "what kind of disk can I order?" (gp3, encrypted).
+- **PVC (PersistentVolumeClaim)** = the order: "I need **5 GiB** of gp3".
+- **PV (PersistentVolume)** = the real disk you got. The **EBS CSI driver** (add-on from Step 01) creates it in AWS.
+
+**Analogy 🍕:** StorageClass = the **menu**, PVC = your **order**, PV = the **pizza that arrives**, EBS CSI driver = the **kitchen**.
 
 ```
 StatefulSet volumeClaimTemplate ──► PVC data-mysql-0 (I need 5 GiB, class gp3)
@@ -94,7 +148,14 @@ StatefulSet volumeClaimTemplate ──► PVC data-mysql-0 (I need 5 GiB, class 
 | **PVC** | A request: "I need 5 GiB of gp3" |
 | **PV** | The real disk Kubernetes got for that request |
 
+| | No PVC (Pod's own disk) | **PVC + EBS** |
+|---|---|---|
+| Pod restarts | Data **lost** ❌ | Data **kept** ✅ |
+| Where data lives | Inside the container | Separate EBS disk in AWS |
+
 **Why the chart creates `gp3`:** a new EKS cluster has **no default StorageClass** (no "default disk type"). Without one, a PVC asking for a disk just waits in `Pending` and MySQL never starts. So our Helm chart creates the `gp3` StorageClass itself.
+
+> **Interview one-liner:** "A PVC asks for storage, the StorageClass says what kind, and the EBS CSI driver creates the real EBS volume as a PV, so the database keeps its data when the Pod restarts."
 
 #### ⚠️ An EBS disk is stuck in one AZ
 
@@ -127,7 +188,26 @@ us-east-1a            us-east-1b            us-east-1c
 
 ### The DB password in this step
 
-The app needs a Kubernetes Secret called `mysql-secret`. In this step **you create it by hand** with random passwords, straight into the cluster: it's never written to a file or Git. In **Step 06** we replace this with AWS Secrets Manager.
+**Definition:** a **Kubernetes Secret** is an object that holds passwords or keys, so they are **not written inside** the app's YAML or image.
+
+- The app needs a Secret called **`mysql-secret`** (MySQL root + app passwords).
+- In this step **you create it by hand** with random passwords, **straight into the cluster**.
+- It's **never saved to a file or Git**, so nobody can find it in the repo.
+
+**Analogy 🔑:** the Secret is a **locked key box** on the wall. The app takes the key from the box; the key is never printed on the door.
+
+```
+openssl rand ──► kubectl create secret mysql-secret ──► mysql + backend Pods read it
+ (random pw)       (only inside the cluster)              (as env variables)
+```
+
+| | Step 03 (now) | **Step 06** (production way) |
+|---|---|---|
+| Where the password lives | Only in the cluster | **AWS Secrets Manager** |
+| Who creates it | You, by hand | External Secrets syncs it automatically |
+| Rotate / audit | Hard ❌ | Easy, logged in AWS ✅ |
+
+> **Interview one-liner:** "Passwords go in a Kubernetes Secret, never in Git; in production we sync them from AWS Secrets Manager."
 
 ## 1.2 The code, file by file
 
