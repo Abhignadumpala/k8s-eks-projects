@@ -94,9 +94,36 @@ StatefulSet volumeClaimTemplate ──► PVC data-mysql-0 (I need 5 GiB, class 
 | **PVC** | A request: "I need 5 GiB of gp3" |
 | **PV** | The real disk Kubernetes got for that request |
 
-EKS has **no default StorageClass**, so the chart creates `gp3`.
+**Why the chart creates `gp3`:** a new EKS cluster has **no default StorageClass** (no "default disk type"). Without one, a PVC asking for a disk just waits in `Pending` and MySQL never starts. So our Helm chart creates the `gp3` StorageClass itself.
 
-> ⚠️ An EBS volume lives in **one AZ**. If `mysql-0` moves, it can only go to a node in that same AZ. That's one reason production uses **Amazon RDS Multi-AZ** for databases.
+#### ⚠️ An EBS disk is stuck in one AZ
+
+**AZ (Availability Zone)** = one separate AWS data center in the region. Our cluster uses 3: `us-east-1a`, `1b`, `1c`.
+
+- An **EBS volume** is like a **hard disk plugged into one building**. It can only connect to a server (node) in **that same AZ**.
+- So if the `mysql-0` Pod moves (node dies, upgrade), it can only restart on a node **in the same AZ as its disk**.
+- If that whole AZ goes down, **MySQL is down** until the AZ comes back, even though the other 2 AZs are fine.
+
+```
+us-east-1a            us-east-1b            us-east-1c
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│ mysql-0     │       │ node ✅      │       │ node ✅      │
+│ EBS disk 💾 │  ✗──► │ can't use   │       │ can't use   │
+│ (stuck here)│       │ the disk    │       │ the disk    │
+└─────────────┘       └─────────────┘       └─────────────┘
+   AZ down = DB down
+```
+
+**What production does instead: Amazon RDS Multi-AZ**
+
+| | MySQL in a Pod + EBS (this lab) | **RDS Multi-AZ** (production) |
+|---|---|---|
+| Copies of the data | 1 disk, 1 AZ | Primary in one AZ + **standby copy in another AZ** |
+| AZ goes down | DB down ❌ | AWS **switches to the standby automatically** (about 1–2 min) ✅ |
+| Backups, patching | You do it | AWS does it |
+| Why we use it here | Learn StatefulSet, PVC, EBS | — |
+
+> **Interview one-liner:** "An EBS volume lives in one AZ, so a database Pod using it can't fail over to another AZ. In production we use RDS Multi-AZ, which keeps a standby copy in a second AZ and fails over automatically."
 
 ### The DB password in this step
 
