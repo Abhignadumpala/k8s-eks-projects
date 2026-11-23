@@ -36,13 +36,38 @@ GitHub Actions  ── OIDC (no AWS keys) ──► IAM role "abhigna-prod-githu
 
 ### CI vs CD vs GitOps
 
+**Definition:** **CI** builds and tests your code automatically. **CD** delivers the good build to the cluster automatically. **GitOps** is a way of doing CD where **Git is the boss**: the cluster always matches what's in Git.
+
+**Analogy 🏭:** CI is the **factory** that makes and tests the product. CD is the **delivery truck**. GitOps = the shop shelf is stocked **only** from the official order list (Git); anything else gets removed.
+
+```
+git push ──► CI (GitHub Actions): test → build → scan → push → sign ──► update tag in Git
+                                                                          │
+                                         Argo CD (in the cluster) pulls ◄─┘ ──► cluster matches Git ✅
+```
+
 | Term | Meaning | Our tool |
 |---|---|---|
 | **CI** (Continuous Integration) | Every change is tested and built automatically | GitHub Actions |
 | **CD** (Continuous Delivery/Deployment) | Every good build reaches the cluster automatically | Argo CD |
 | **GitOps** | Git is the **single source of truth**; a tool **in the cluster** pulls Git and makes the cluster match | Argo CD |
 
+> **Interview one-liner:** "CI builds and tests, CD deploys; with GitOps, Git is the single source of truth and Argo CD in the cluster pulls and applies it."
+
 ### Push vs pull deployment
+
+**Definition:** **push** = the CI pipeline **logs in to the cluster** and deploys. **Pull** = a tool **inside the cluster** watches Git and deploys **itself**.
+
+- With push, GitHub needs the **cluster's keys**. If GitHub is hacked, so is the cluster.
+- With pull, the cluster **reaches out** to Git. GitHub has **no** cluster keys at all.
+- Pull also **undoes manual changes** (self-heal), because it keeps comparing with Git.
+
+**Analogy 📦:** push = giving the courier **your house key** so they can put the parcel inside. Pull = **you collect** the parcel from the locker. Nobody else needs your key.
+
+```
+Push:  GitHub Actions ──kubectl (cluster keys 🔑 in CI ❌)──► cluster
+Pull:  GitHub repo ◄──watches── Argo CD (inside cluster) ──applies──► cluster   (no keys in CI ✅)
+```
 
 | | Push (CI runs `kubectl`/`helm`) | **Pull (GitOps)** ✅ |
 |---|---|---|
@@ -51,7 +76,17 @@ GitHub Actions  ── OIDC (no AWS keys) ──► IAM role "abhigna-prod-githu
 | Someone changes the cluster by hand | Stays changed (drift) | Argo CD **undoes** it (self-heal) |
 | Rollback | Re-run an old pipeline | `git revert` |
 
+> **Interview one-liner:** "We use pull-based GitOps: Argo CD inside the cluster pulls from Git, so CI never holds cluster credentials and manual drift is reverted."
+
 ### GitHub → AWS without keys (OIDC)
+
+**Definition:** **OIDC (OpenID Connect)** lets GitHub give each workflow run a **signed ID token** ("I am this repo, this branch"). AWS **trusts** GitHub's signature and swaps the token for **temporary AWS credentials**.
+
+- CI must push images to **ECR**, so it needs AWS access.
+- **Old way:** store an AWS **access key** in GitHub secrets. It never expires and can leak ❌.
+- **OIDC way:** no key stored. Each run gets **1-hour** credentials, only for **our repo + main branch** ✅.
+
+**Analogy 🎟️:** instead of giving GitHub a **permanent house key**, AWS checks GitHub's **signed ID card** at the door each time and hands out a **1-hour visitor pass**.
 
 ```
 1. Workflow asks GitHub for an OIDC token: "I am repo Abhignadumpala/k8s-eks-projects, branch main"
@@ -62,7 +97,17 @@ GitHub Actions  ── OIDC (no AWS keys) ──► IAM role "abhigna-prod-githu
 
 No AWS access key is stored in GitHub. A fork or another branch **can't** get the role.
 
+| | Access key in GitHub secrets | **OIDC** ✅ |
+|---|---|---|
+| Stored in GitHub | Permanent key ❌ | Nothing ✅ |
+| Expires | Never (until rotated) ❌ | 1 hour ✅ |
+| Fork / other branch can use it | If leaked, anyone ❌ | No: trust policy checks repo + branch ✅ |
+
+> **Interview one-liner:** "GitHub Actions uses OIDC to assume an AWS role with 1-hour credentials, restricted by the trust policy to our repo and main branch: no stored access keys."
+
 ### Where each secret lives
+
+**Definition:** a **GitHub repo secret** is an encrypted value GitHub keeps for a repo; workflows can use it, but it's **hidden** in logs and never shown again.
 
 | Secret | Where | Why |
 |---|---|---|
@@ -73,12 +118,31 @@ No AWS access key is stored in GitHub. A fork or another branch **can't** get th
 
 ### Image tags = commit SHA
 
+**Definition:** a **commit SHA** is the unique ID Git gives every commit (e.g. `a1b2c3d4…`). We use its first 7 characters as the image tag.
+
+**Analogy 🧾:** like a **receipt number**: from the tag you can find the exact commit, and from that the exact code.
+
+```
+commit a1b2c3d ──► image prod-backend:a1b2c3d ──► running Pod
+   (code)              (same ID)                  "which code is this?" → git show a1b2c3d ✅
+```
+
 Every build is tagged with the first 7 characters of the commit, e.g. `a1b2c3d`:
 - unique (works with **immutable** ECR tags)
 - traceable: tag → exact commit → exact code
 - allowed by Kyverno (not `latest`)
 
 ### Argo CD in 4 words
+
+**Definition:** **Argo CD** is a GitOps tool that runs **inside the cluster**, watches a Git repo, and keeps the cluster **matching** it.
+
+**Analogy 🌡️:** a **thermostat**. You set the temperature (Git); it keeps checking the room (cluster) and fixes any difference by itself.
+
+```
+Git (desired) ──compare every 3 min──► cluster (live)
+   same?  ✅ Synced
+   diff?  ⚠️ OutOfSync ──► sync ──► ✅
+```
 
 | Word | Meaning |
 |---|---|
@@ -87,9 +151,24 @@ Every build is tagged with the first 7 characters of the commit, e.g. `a1b2c3d`:
 | **Prune** | Delete objects that were removed from Git |
 | **Self-heal** | Undo manual changes in the cluster |
 
+> **Interview one-liner:** "Argo CD continuously compares Git with the cluster; with automated sync, prune and self-heal, the cluster always matches Git."
+
 ### Canary with Argo Rollouts
 
-A **Rollout** replaces the backend **Deployment** and adds release **strategies**.
+**Definition:** a **canary release** sends a new version to a **small share** of users first. If it's healthy, you give it more; if not, you **abort** and only a few users were affected. **Argo Rollouts** adds this to Kubernetes.
+
+- A **Rollout** object **replaces** the backend **Deployment** (same Pod template, plus a release strategy).
+- It moves to the new version **step by step**: 25% → pause → 50% → 100%.
+- At any step: `promote` (go on) or `abort` (back to the old version).
+
+**Analogy 🐤:** miners took a **canary** into the mine: if the small bird was fine, the air was safe for everyone.
+
+```
+v1 ████████ 100%
+   ──► v2 ██ 25%  v1 ██████ 75%   ⏸ human checks
+   ──► v2 ████ 50% v1 ████ 50%    ⏸ 60 s
+   ──► v2 ████████ 100% ✅        (or abort ──► v1 100%)
+```
 
 | Strategy | How | Risk |
 |---|---|---|
@@ -111,6 +190,8 @@ steps:
 Without a traffic router, the "weight" is the **share of Pods**. (With Istio waypoints or the ALB you can split by exact %, a next step.)
 
 Commands: `kubectl argo rollouts promote backend` (continue), `kubectl argo rollouts abort backend` (go back to stable).
+
+> **Interview one-liner:** "We release with an Argo Rollouts canary: 25%, manual check, 50%, then 100%, and abort instantly rolls back to the stable version."
 
 ## 1.2 The code, file by file
 
