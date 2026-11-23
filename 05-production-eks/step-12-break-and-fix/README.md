@@ -26,6 +26,14 @@ Break the app **on purpose**, 5 different ways, and fix it **like an on-call eng
 
 ## The troubleshooting method (use it every time)
 
+**Definition:** a **troubleshooting method** is a fixed order of checks, so you find the real cause **step by step** instead of guessing.
+
+- Start from **what users see** (symptom), then narrow down to **one broken object**.
+- Read what **Kubernetes** says (events), then what the **app** says (logs).
+- Change **one thing** at a time, and **check** the symptom is really gone.
+
+**Analogy 🩺:** a doctor: listen to the patient (symptom) → find where it hurts (scope) → check the test results (events, logs) → diagnose (root cause) → treat and re-check.
+
 ```
 1. SYMPTOM      What do users / alerts see?             (browser, curl, Grafana, alerts)
 2. SCOPE        Which object is unhealthy?               kubectl get pods,deploy,rs,rollout -n three-tier
@@ -35,7 +43,18 @@ Break the app **on purpose**, 5 different ways, and fix it **like an on-call eng
 6. FIX + VERIFY Change one thing, check the symptom is gone
 ```
 
+> **Interview one-liner:** "I go symptom → scope → events (`kubectl describe`) → logs (`--previous`) → one-sentence root cause → one fix, then verify."
+
 ## Pod status cheat sheet
+
+**Definition:** the **STATUS** column in `kubectl get pods` tells you **at which stage** a Pod is stuck: before a node is chosen, while downloading the image, or after the app started.
+
+```
+Pending ──► ContainerCreating ──► Running (0/1 → 1/1 Ready ✅)
+  │ no node fits    │ image / volume         │ app crashes
+  ▼                 ▼                        ▼
+Pending         ImagePullBackOff        CrashLoopBackOff / OOMKilled
+```
 
 | Status | Means | First command |
 |---|---|---|
@@ -49,6 +68,10 @@ Break the app **on purpose**, 5 different ways, and fix it **like an on-call eng
 
 ## HTTP errors at the edge
 
+**Definition:** the **edge** is the entry point users hit (the ALB and nginx). When it can't get a good answer from behind, it returns a **5xx** error code.
+
+**Analogy 📞:** a receptionist (ALB) forwarding a call. 502 = the line behind is **dead**. 503 = **nobody is available**. 504 = the person **took too long** to answer.
+
 | Error | Usually means |
 |---|---|
 | **502 Bad Gateway** | The proxy (nginx/ALB) reached nothing behind it: no ready backend, connection refused |
@@ -57,7 +80,11 @@ Break the app **on purpose**, 5 different ways, and fix it **like an on-call eng
 
 ## Why we pause Argo CD first
 
-Argo CD **self-heal** undoes manual changes within seconds, which is great in production but would "fix" our drills before we can study them. We pause auto-sync at the start and turn it back on at the end.
+- Argo CD **self-heal** undoes manual changes within seconds.
+- In production that's great; here it would "fix" our drills **before we can study them**.
+- So we **pause auto-sync** at the start and turn it back on at the end.
+
+**Analogy 🧹:** a cleaner who instantly tidies the room. Great normally, but you ask them to wait while you practise finding the mess.
 
 ---
 

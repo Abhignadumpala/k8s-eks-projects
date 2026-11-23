@@ -32,13 +32,32 @@ You ──ssh tunnel──► bastion ──port-forward──► Grafana / Prom
 
 ### The 3 pillars of observability
 
+**Definition:** **observability** = being able to tell **what's happening inside** your app from the outside, using the data it gives out: **metrics, logs and traces**.
+
+- **Metrics** tell you **that** something is wrong (error rate jumped).
+- **Logs** tell you **what** went wrong (the exact error message).
+- **Traces** tell you **where** a slow request spent its time.
+
+**Analogy 🚗:** metrics = the **dashboard gauges** (speed, fuel), logs = the **trip diary**, traces = the **GPS route** of one journey.
+
 | Pillar | Answers | Tool (this step) |
 |---|---|---|
 | **Metrics** | *How much / how fast / how many?* (numbers over time) | Prometheus + Grafana ✅ |
 | **Logs** | *What exactly happened?* (text events) | `kubectl logs` today; Loki / CloudWatch in production |
 | **Traces** | *Where did this one request spend its time?* | OpenTelemetry + Tempo/X-Ray (a next step) |
 
+> **Interview one-liner:** "Observability has 3 pillars: metrics show that something is wrong, logs show what happened, and traces show where a request spent its time."
+
 ### What is in `kube-prometheus-stack`
+
+**Definition:** **kube-prometheus-stack** is one Helm chart that installs a **complete monitoring set**: Prometheus (collects numbers), Grafana (draws graphs) and Alertmanager (sends alerts), plus helpers.
+
+```
+node-exporter ─┐
+kube-state-metrics ─┼──► Prometheus (stores) ──► Grafana (graphs 📈)
+backend /metrics ─┘           │
+                              └── rule breaks ──► Alertmanager ──► Slack / email 🔔
+```
 
 | Part | Job |
 |---|---|
@@ -51,7 +70,17 @@ You ──ssh tunnel──► bastion ──port-forward──► Grafana / Prom
 
 ### Pull model and the ServiceMonitor
 
-Prometheus **pulls** metrics from `/metrics` endpoints. A **ServiceMonitor** tells it *which Service and port to scrape*:
+**Definition:** **pull model** = Prometheus **goes and asks** each app for its numbers (called **scraping**), instead of apps sending them. A **ServiceMonitor** is the object that tells Prometheus *which Service and port to scrape*.
+
+- The app shows its numbers as plain text at **`/metrics`**.
+- Every 30 s, Prometheus **visits** that page and saves the numbers.
+- The **ServiceMonitor** is the "address book" entry for that visit.
+
+**Analogy 📋:** a meter reader **visits each house** every month to read the electricity meter. The ServiceMonitor is the **list of houses** to visit.
+
+```
+ServiceMonitor (address book) ──► Prometheus ──GET /metrics every 30s──► backend Pods
+```
 
 ```yaml
 kind: ServiceMonitor
@@ -69,6 +98,10 @@ Our backend exposes `http_requests_total{method, route, status}` (Step 02 `serve
 
 ### PromQL basics
 
+**Definition:** **PromQL** is Prometheus' **query language**: how you ask questions like *"how many requests per second?"* or *"what % are errors?"*.
+
+**Key word:** a **counter** only **goes up** (total requests since start). `rate()` turns it into **per second**, which is what you actually want to see.
+
 | Query | Means |
 |---|---|
 | `up` | 1 if a target was scraped OK, 0 if not |
@@ -79,6 +112,10 @@ Our backend exposes `http_requests_total{method, route, status}` (Step 02 `serve
 
 ### The 4 golden signals (Google SRE)
 
+**Definition:** the **4 golden signals** are the 4 things Google's SRE book says to watch for **any** user-facing service. If these 4 look good, users are happy.
+
+**Analogy 🏪:** for a shop: how long the queue takes (latency), how many customers (traffic), how many leave angry (errors), how full the shop is (saturation).
+
 | Signal | Our metric |
 |---|---|
 | **Latency** | (add a histogram to the app: a next step) |
@@ -86,13 +123,29 @@ Our backend exposes `http_requests_total{method, route, status}` (Step 02 `serve
 | **Errors** | 5xx share |
 | **Saturation** | CPU/memory vs requests (`kubectl top`, Grafana) |
 
+> **Interview one-liner:** "We watch the 4 golden signals: latency, traffic, errors and saturation, and alert on error rate from Prometheus."
+
 ### Why Prometheus must join the mesh
 
-The backend is **STRICT mTLS** with an allow-list (Step 08). Plain-text scrapes are refused. So we put the `monitoring` namespace in **ambient** too: Prometheus gets an identity, and the backend's AuthorizationPolicy already allows `namespaces: ["monitoring"]`.
+- The backend is **STRICT mTLS** with an allow-list (Step 08), so **plain-text** visits are refused.
+- Prometheus is outside the mesh → its scrapes are plain text → **refused** ❌.
+- Fix: put the `monitoring` namespace in **ambient** too. Prometheus gets an identity, and the backend's AuthorizationPolicy already allows `namespaces: ["monitoring"]` ✅.
+
+```
+Prometheus (no mesh) ──plain text──► backend ❌ refused (STRICT)
+Prometheus (ambient) ══mTLS 🔒════► backend ✅ allowed (monitoring is on the list)
+```
 
 ### Turning on the ServiceMonitor = a Git commit
 
-The app is managed by Argo CD now. **Don't** use `helm upgrade` any more: change `gitops/values-prod.yaml` and push. Argo CD does the rest.
+- The app is managed by **Argo CD** now (Step 10).
+- If you `helm upgrade` by hand, Argo CD sees a difference with Git and **undoes it** (self-heal).
+- So: change `gitops/values-prod.yaml`, **push**, and Argo CD applies it.
+
+| | `helm upgrade` by hand | **Git commit** ✅ |
+|---|---|---|
+| Stays | Undone by Argo CD ❌ | Yes ✅ |
+| Recorded | Nowhere ❌ | Git history ✅ |
 
 ## 1.2 The code, file by file
 

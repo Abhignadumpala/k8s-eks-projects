@@ -17,7 +17,13 @@ Delete everything in the **right order**, so nothing is left behind that `terraf
 
 ## Why the order matters
 
-Terraform only deletes what **Terraform created**. Some AWS resources were created **by controllers inside the cluster**:
+**Definition:** **Terraform only deletes what Terraform created.** Some AWS resources were created **by controllers inside the cluster**, so Terraform doesn't know they exist.
+
+- The **LB Controller** made the ALB, the **EBS CSI driver** made the disk, **Karpenter** made extra EC2 nodes.
+- If you destroy the cluster **first**, those controllers die and **nobody** deletes their AWS resources.
+- They keep **billing**, and they block the VPC from being deleted.
+
+**Analogy 🏠:** before demolishing a house (cluster), the tenants (controllers) must **take their furniture out** (ALB, EBS, EC2). If you demolish first, the furniture is left on the land, and you still pay for storage.
 
 | AWS resource | Created by | If you destroy the cluster first |
 |---|---|---|
@@ -26,6 +32,8 @@ Terraform only deletes what **Terraform created**. Some AWS resources were creat
 | **EC2 nodes** from Karpenter | Karpenter (from the NodePool) | Instances keep running and **billing**; subnets can't be deleted |
 
 So: **delete the Kubernetes objects first**, let the controllers clean up AWS, **then** `terraform destroy`.
+
+> **Interview one-liner:** "Before terraform destroy, delete the Ingresses, PVCs and Karpenter NodePools so the controllers remove the ALBs, EBS volumes and nodes they created; otherwise they leak cost and block the VPC deletion."
 
 ```
 1. Argo CD app      ─► stop GitOps from re-creating things
