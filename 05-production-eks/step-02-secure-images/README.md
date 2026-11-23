@@ -132,9 +132,16 @@ All app code is in [`../app`](../app).
 
 **Multi-stage build** = 2 `FROM` lines in one Dockerfile. Stage 1 **installs** (has npm), stage 2 is what we **ship** (no npm). Only what we `COPY --from=build` reaches stage 2.
 
+| Stage | Name | Job | Shipped? |
+|---|---|---|---|
+| **1** | **Build stage** | Install dependencies (`npm ci`): has npm | ❌ Thrown away |
+| **2** | **Runtime stage** | Run the app (`node server.js`): only node + app | ✅ Final image |
+
 ```
-Stage 1: build (has npm) ──COPY node + /app──► Stage 2: run (no npm) ← shipped
+Build stage (tools to MAKE the app) ──COPY──► Runtime stage (only what RUNS the app) ← shipped
 ```
+
+The **last `FROM`** is always the final image.
 
 ```dockerfile
 # ───────────────────────────────────────────────
@@ -199,6 +206,8 @@ CMD ["node", "server.js"]
 > Tried distroless: 1 CRITICAL + 7 HIGH (old OpenSSL) and no shell → kept Alpine (0 CVEs).
 
 > **Interview one-liner:** "Multi-stage keeps build tools out of the runtime image: stage 1 runs `npm ci`, stage 2 copies only node and the app. Smaller image, fewer CVEs."
+
+> **Interview one-liner:** "Stage 1 is the build stage, with the tools to install and compile. Stage 2 is the runtime stage, with only what the app needs to run. Only the runtime stage is shipped."
 
 ### `app/frontend/Dockerfile`
 
