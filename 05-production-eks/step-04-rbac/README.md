@@ -32,7 +32,19 @@ Pod ──► ServiceAccount "backend" ──► no RoleBinding ──► can't 
 
 ### RBAC in one table
 
-**RBAC (Role-Based Access Control)** = rules that say **who** may do **which action** on **which objects**, and **where**.
+**Definition:** **RBAC (Role-Based Access Control)** = rules that say **who** may do **which action** on **which objects**, and **where** (which namespace).
+
+- First Kubernetes asks **"who are you?"** (**AuthN**, authentication: your IAM role).
+- Then it asks **"what may you do?"** (**AuthZ**, authorization: RBAC).
+- If no rule says "yes", the answer is **no**. Nothing is allowed by default.
+
+**Analogy 🏢:** an office building. The **Role** is a key card type ("can open meeting rooms"), the **RoleBinding** gives that card to a person, and the **namespace** is the floor the card works on.
+
+```
+WHO (Subject)          gets           WHAT (Role)                    WHERE
+group dev-readonly ──► RoleBinding ──► ClusterRole "view"   ──►  only namespace three-tier
+                       (the link)      (get, list, watch)
+```
 
 | Object | Question it answers | Scope |
 |---|---|---|
@@ -44,7 +56,11 @@ Pod ──► ServiceAccount "backend" ──► no RoleBinding ──► can't 
 
 **Trick:** a **RoleBinding can point to a ClusterRole**. You reuse a ready-made role (like `view`) but **only inside that namespace**. That's what we do for developers.
 
+> **Interview one-liner:** "A Role says what is allowed, a RoleBinding says who gets it; RoleBinding is per namespace, ClusterRoleBinding is cluster-wide, and everything is denied by default."
+
 ### Verbs
+
+**Definition:** a **verb** is the **action** in an RBAC rule, like a word in a sentence: "**list** pods", "**delete** deployments".
 
 | Verb | Means |
 |---|---|
@@ -54,7 +70,18 @@ Pod ──► ServiceAccount "backend" ──► no RoleBinding ──► can't 
 | `pods/exec` + `create` | Open a shell in a Pod (powerful: often **not** given) |
 | `pods/portforward` + `create` | Port-forward to a Pod |
 
+> ⚠️ `pods/exec` = a shell **inside** the Pod: you can read its files and env variables (passwords!). Give it only to people who debug.
+
 ### Built-in ClusterRoles (recap from Step 01)
+
+**Definition:** Kubernetes ships with **4 ready-made ClusterRoles**, from "can do everything" to "can only look".
+
+```
+cluster-admin  ████████████  everything, every namespace
+admin          █████████     everything in one namespace, incl. RBAC
+edit           ██████        change apps, not RBAC
+view           ███           read only, NOT Secrets
+```
 
 | ClusterRole | Allows |
 |---|---|
@@ -65,6 +92,14 @@ Pod ──► ServiceAccount "backend" ──► no RoleBinding ──► can't 
 
 ### People vs apps
 
+**Definition:** people and apps both talk to the Kubernetes API, but they **prove who they are** in different ways.
+
+- **People** log in with an **IAM role** → an **EKS access entry** maps it to a Kubernetes **group**.
+- **Apps (Pods)** use a **ServiceAccount**, an identity Kubernetes gives to a Pod.
+- Both get permissions the same way: **RBAC bindings**.
+
+**Analogy 🪪:** people show their **company ID badge** (IAM); apps wear a **machine name tag** (ServiceAccount). The same security guard (RBAC) checks both.
+
 | | People | Apps (Pods) |
 |---|---|---|
 | Identity | IAM role → **EKS access entry** → Kubernetes group | **ServiceAccount** |
@@ -73,33 +108,64 @@ Pod ──► ServiceAccount "backend" ──► no RoleBinding ──► can't 
 
 ### Why our app ServiceAccounts have NO permissions
 
-Our app never talks to the Kubernetes API. So:
-1. **No RoleBinding** for `frontend`, `backend`, `mysql`.
-2. **`automountServiceAccountToken: false`**: Kubernetes doesn't even put an API token file inside the Pods.
+**Definition:** **least privilege** = give only the permissions that are really needed. Our app **never talks to the Kubernetes API**, so it needs **zero**.
 
-If an attacker breaks into the backend Pod, there is **no token to steal** and nothing it could do with one.
+- **No RoleBinding** for `frontend`, `backend`, `mysql` → they can't do anything in the API.
+- **`automountServiceAccountToken: false`** → Kubernetes doesn't even put an API **token** file inside the Pods.
+- If an attacker breaks into the backend Pod, there is **no token to steal** and nothing it could do with one.
 
-> Default behaviour (without our setting): every Pod gets a token at `/var/run/secrets/kubernetes.io/serviceaccount/token`. Many attacks start by stealing it.
+**Analogy 🔑:** don't leave a house key under the doormat if nobody needs it. No key = nothing to steal.
+
+```
+Default Pod                                   Our Pods
+/var/run/secrets/.../token  🔑  ◄── attacker  (no token file)  ✅
+ = API key inside the Pod      steals it      nothing to steal
+```
+
+| | Default | **Our setup** |
+|---|---|---|
+| Token file in the Pod | Yes ❌ | No ✅ |
+| RBAC permissions | Whatever someone binds | None ✅ |
+| Attacker in the Pod can call the API | Maybe ❌ | No ✅ |
+
+> **Interview one-liner:** "Apps that don't use the Kubernetes API get a ServiceAccount with no RoleBinding and automountServiceAccountToken false, so there's no token to steal."
 
 ### Testing permissions without new users: impersonation
 
-As `cluster-admin` (the bastion), you can **pretend** to be someone else:
+**Definition:** **impersonation** = an admin asks Kubernetes *"what would happen if **this user** tried this?"*, without logging in as them.
+
+- You are `cluster-admin` on the bastion.
+- Add `--as=<user> --as-group=<group>` to a command.
+- Kubernetes answers **exactly** as it would for that user: `yes` or `no`.
 
 ```bash
 kubectl auth can-i list pods -n three-tier --as=jane --as-group=dev-readonly
 ```
 
-Kubernetes answers `yes` or `no` exactly as it would for that user and group. It's the standard way to test RBAC.
+**Analogy 🎭:** a manager tries a new employee's key card at each door, to check it opens the right ones, before handing it over.
+
+> **Interview one-liner:** "We test RBAC with `kubectl auth can-i --as --as-group`, which checks a user's permissions without needing their credentials."
 
 ### How a real developer would log in (EKS access entry)
 
-In a company, each developer team has an **IAM role** (often from SSO). One command maps it to a Kubernetes group (like `bastion-admin` in Step 01):
+**Definition:** an **EKS access entry** links an **IAM role** (AWS) to a **Kubernetes group** (inside the cluster).
+
+- In a company, each developer team has an **IAM role** (often from SSO login).
+- One command maps that role to a group, like we did for `bastion-admin` in Step 01.
+- The RoleBindings in this step then decide what that group may do.
+
+```
+Developer ──SSO──► IAM role ──access entry──► group dev-readonly ──RoleBinding──► view in three-tier
+           (AWS)                (the bridge)        (Kubernetes)
+```
 
 ```bash
 aws eks create-access-entry --cluster-name abhigna-prod --principal-arn arn:aws:iam::<account-id>:role/<developer-role> --kubernetes-groups dev-readonly
 ```
 
-The RoleBindings in this step then decide what that group may do. We test with impersonation, so we don't need to create extra IAM roles.
+We test with **impersonation**, so we don't need to create extra IAM roles in this lab.
+
+> **Interview one-liner:** "EKS access entries map IAM roles to Kubernetes groups; RBAC then controls what each group can do."
 
 ## 1.2 The code: `platform/k8s/rbac-developer.yaml`
 
