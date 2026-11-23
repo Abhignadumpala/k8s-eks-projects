@@ -57,6 +57,13 @@ Think of a **restaurant 🍽️**: the cooking can be perfect, but if the vegeta
 | Too much inside the image | Shell tools, compilers, dev libraries | Small Alpine base, only production dependencies |
 | Container runs as root | A bug gives the attacker root | Images run as a normal user (`node`, `nginx` uid 101) |
 
+```
+code + base image + libraries ──► build ──► 🔍 scan ──► registry ──► ✍️ sign ──► ✅ verify ──► cluster
+       (ingredients)             (cook)   (inspect)   (warehouse)   (seal)     (check seal)
+```
+
+> **Interview one-liner:** "Supply chain security means scanning images for CVEs, storing them in a private registry with immutable tags, and signing them so the cluster only runs images we built."
+
 ### The 3 tools
 
 | Tool | What it does | Analogy |
@@ -88,12 +95,41 @@ Docker Hub ──(FROM node / nginx)──► 💻 docker build ──► Trivy 
 
 ### CVE, severity and "fixed version"
 
-**CVE** = a public ID for one known security bug, e.g. `CVE-2026-12345`.
-Trivy gives each one a **severity** (LOW, MEDIUM, HIGH, CRITICAL) and says if a **fixed version** exists.
+**Definition:** a **CVE (Common Vulnerabilities and Exposures)** is a **public ID number** for one known security bug in a piece of software, e.g. `CVE-2026-31789` (a heap overflow in OpenSSL).
+
+- Every package in an image (openssl, npm, express…) can have CVEs.
+- **Trivy** lists every package in the image and checks each one against the public CVE lists.
+- For each CVE it shows a **severity** and, if one exists, the **fixed version** to upgrade to.
+
+**Analogy 🚗:** a CVE is a **car recall notice**: "model X, year Y has a brake problem, fixed in part Z". Trivy checks every part in your car against all recall notices.
+
+| Term | Meaning |
+|---|---|
+| **CVE ID** | Unique name for one bug, so everyone talks about the same thing |
+| **Severity** | LOW / MEDIUM / HIGH / CRITICAL: how dangerous it is |
+| **Installed version** | The version inside your image |
+| **Fixed version** | The version where the bug is patched: upgrade to remove the CVE |
 
 We fail only on **HIGH or CRITICAL that have a fix** (`--ignore-unfixed`): those you can actually fix by updating. Failing on every unfixed LOW would block you forever with nothing to do.
 
+> **Interview one-liner:** "A CVE is a public ID for a known vulnerability; we scan with Trivy and block HIGH/CRITICAL ones that have a fix. Fewer packages in the image means fewer CVEs."
+
 ### Tag vs digest
+
+**Definition:** a **tag** is a **name you choose** for an image (`v1`). A **digest** is the image's **fingerprint**: a SHA-256 hash calculated from its exact content (`sha256:9f86d0...`).
+
+- A tag is like a **sticky note**: someone can move it to a different image.
+- A digest is **calculated** from the content: change 1 byte → a completely different digest.
+- So a digest always means **one exact image**, forever.
+
+**Analogy 🪪:** a tag is a person's **nickname** (anyone can be called "Sam"); a digest is their **fingerprint** (only one person has it).
+
+```
+Day 1: v1 → image A (good)          ← you sign "v1"
+Day 2: attacker pushes image B as v1
+       v1 → image B (bad) 😱         ← "v1" now means something else
+Signing the digest sha256:aaa… → the signature belongs to image A forever; image B has no valid signature ✅
+```
 
 | | Example | Can it change? |
 |---|---|---|
@@ -102,7 +138,13 @@ We fail only on **HIGH or CRITICAL that have a fix** (`--ignore-unfixed`): those
 
 We **sign the digest**, not the tag: the signature is bound to the exact bytes.
 
+> **Interview one-liner:** "A tag is a movable name; a digest is the SHA-256 hash of the image content. We sign and deploy by digest because it always means one exact image."
+
 ### How signing works (key pair)
+
+**Definition:** **signing** = attaching a proof that **we** built this exact image. It uses a **key pair**: a **private key** (secret, makes signatures) and a **public key** (shared, checks them).
+
+**Analogy 🔏:** the private key is your **wax seal stamp** (only you have it); the public key is a **photo of the seal** that anyone can use to check the seal on the box is real and unbroken.
 
 ```
 cosign generate-key-pair
@@ -112,6 +154,8 @@ cosign generate-key-pair
 
 - **Sign:** `cosign sign --key cosign.key <image@digest>` → a signature is stored in ECR next to the image.
 - **Verify:** `cosign verify --key cosign.pub <image@digest>` → ✅ only if it was signed by **your** private key and the image is unchanged.
+
+> **Interview one-liner:** "We sign the image digest with Cosign's private key; Kyverno verifies it with the public key, so only images from our pipeline can run."
 
 > Production teams often use **keyless** signing (GitHub's identity + Sigstore) or a key in **AWS KMS**, so no key file exists at all. We use a key file because it is the easiest way to see how signing works.
 

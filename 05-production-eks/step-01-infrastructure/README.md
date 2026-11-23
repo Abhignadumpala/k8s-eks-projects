@@ -39,6 +39,17 @@ This guide has 2 parts:
 
 ### The pieces, in simple words
 
+**Definition:** an EKS cluster is not one thing: it's a **network** (VPC, subnets), a **brain** run by AWS (control plane), **machines** that run your Pods (nodes), and a few **helpers** (bastion, ECR, add-ons).
+
+```
+VPC (the building)
+├── public subnets  (front door)  ── bastion 🖥️ · load balancers · NAT ──► internet
+└── private subnets (back rooms)  ── system nodes + app nodes (Pods run here)
+                                         ▲
+             EKS control plane (AWS-managed brain 🧠) ── manages them
+             ECR (private image store 📦) ── nodes pull images from it
+```
+
 | Piece | What it is | Think of it as |
 |---|---|---|
 | **VPC** | Your own private network inside AWS | The building everything lives in |
@@ -53,9 +64,23 @@ This guide has 2 parts:
 | **ECR** | Elastic Container Registry: AWS's private image storage | Your private Docker Hub |
 | **Add-on** | Extra software that EKS installs and upgrades for you | Plug-ins for the cluster |
 
+> **Interview one-liner:** "Our EKS cluster runs in a VPC across 3 AZs: worker nodes in private subnets, the ALB and bastion in public subnets, outbound internet through NAT, and the control plane managed by AWS."
+
 ### What is Terraform, and why use it?
 
-**Terraform** = a tool where you **write your infrastructure as code** (`.tf` files) and Terraform creates it in AWS for you.
+**Definition:** **Terraform** = a tool where you **write your infrastructure as code** (`.tf` files) and Terraform creates it in AWS for you. This is called **IaC (Infrastructure as Code)**.
+
+- You **describe** what you want ("a VPC, an EKS cluster, 4 nodes") in files.
+- `terraform plan` **shows** what will change; `terraform apply` **builds** it.
+- Terraform remembers what it built (the **state** file), so `destroy` removes exactly that.
+
+**Analogy 📐:** the `.tf` files are an **architect's blueprint**. Terraform is the **construction crew** that builds exactly what's on the blueprint, every time, and can demolish it cleanly.
+
+```
+.tf files (blueprint) ──terraform plan──► preview 👀 ──terraform apply──► AWS resources 🏗️
+                                                           │
+                                                 terraform.tfstate (what was built)
+```
 
 | Clicking in the AWS console | Terraform |
 |---|---|
@@ -73,6 +98,8 @@ The Terraform commands you will use:
 | `terraform plan` | Shows what **would** be created (a preview) | No |
 | `terraform apply` | Actually creates everything in AWS | **Yes** |
 | `terraform destroy` | Deletes everything it created | Stops the cost |
+
+> **Interview one-liner:** "We build the whole EKS platform with Terraform: it's repeatable, reviewed in Git, previewed with plan, and fully removed with destroy."
 
 ### What makes this cluster "production-grade"?
 
@@ -103,6 +130,8 @@ A simple practice cluster **works**, but it isn't how companies run Kubernetes. 
 8. **SSM instead of SSH:** SSH needs an open port and a key file that can leak. SSM needs neither, and AWS records every login.
 9. **Least privilege:** the machines get only the permissions they need, so a hacker who gets in can do very little.
 10. **ECR:** your private image registry in AWS. Every image is scanned, and a tag like `v1` can never be overwritten with a different image.
+
+> **Interview one-liner:** "Production-grade for us means a supported EKS version, 3 AZs, private nodes, separate system and app node groups with taints, Pod Identity, IMDS hop limit 1, SSM instead of SSH, least-privilege IAM and a private ECR with immutable tags."
 
 ### System vs app node groups
 
