@@ -49,12 +49,27 @@ ALB (public subnets)   ◄── created by the AWS Load Balancer Controller (sy
 
 ### The AWS Load Balancer Controller
 
-A Kubernetes **Ingress** is only a wish: *"send web traffic for `/` to the frontend Service"*. Someone must build the real load balancer. On EKS that is the **AWS Load Balancer Controller**: it watches Ingress objects and creates an **ALB** in AWS.
+**Definition:** the **AWS Load Balancer Controller** is a program running inside the cluster. When you create an **Ingress**, it creates a real **ALB** (Application Load Balancer) in AWS for you.
+
+**Why we need it:**
+- An **Ingress** is only a **rule written on paper**: *"send website traffic to the frontend"*.
+- Kubernetes itself **can't build** a load balancer in AWS.
+- The **controller reads the rule** and **builds the ALB** in AWS.
+
+**Analogy 🏠:** the Ingress is the **house plan**, the controller is the **builder**, and the ALB is the **real house**. A plan with no builder stays on paper.
+
+| Thing | Who | Job |
+|---|---|---|
+| **Ingress** | You (YAML) | Says *what* you want: "traffic for `/` → frontend" |
+| **LB Controller** | Pod in the cluster | Sees the Ingress, calls AWS |
+| **ALB** | AWS | The real load balancer users hit from the internet |
 
 ```
-You: kubectl apply Ingress  ──►  LB Controller sees it  ──►  calls AWS API  ──►  ALB created
-                                (needs AWS permissions → Pod Identity role from Terraform)
+You write Ingress ──► Controller sees it ──► asks AWS ──► ALB is created 🌐
+                      (needs AWS permission → Pod Identity role from Terraform)
 ```
+
+> **Interview one-liner:** "An Ingress is just a rule; the AWS Load Balancer Controller watches Ingresses and creates the ALB in AWS."
 
 | Setting | Our value | Why |
 |---|---|---|
