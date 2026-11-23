@@ -27,11 +27,32 @@ You **prove** that every app container is locked down, and that the namespace **
 
 ### Why harden a Pod?
 
-A container is **not** a virtual machine: it shares the node's Linux kernel. If a container runs as **root** with extra powers and an attacker breaks into the app, they are one step from the **node**, and from every other Pod on it.
+**Definition:** **hardening** = removing every power a container doesn't need, so a hacked app can do as little damage as possible.
+
+- A container is **not** a virtual machine: it **shares the node's Linux kernel** with every other Pod.
+- If it runs as **root** with extra powers and an attacker breaks into the app, they are **one step from the node**.
+- From the node they can reach **every other Pod** on it.
 
 **Analogy 🏨:** a hotel guest (container) gets a key to **their own room only**. Hardening means no master key (root), no tools to break walls (capabilities), and furniture bolted down (read-only filesystem).
 
+```
+Not hardened                                  Hardened
+attacker ──► app (root, all powers) ──► node ❌   attacker ──► app (user 1000, no powers) ✗ stuck ✅
+                                     └► other Pods
+```
+
+| | Default container | **Hardened (our Pods)** |
+|---|---|---|
+| Runs as | root ❌ | normal user (101 / 1000 / 999) ✅ |
+| Can change its own files | Yes ❌ | No (read-only) ✅ |
+| Special Linux powers | Some ❌ | None (drop ALL) ✅ |
+| Attacker reaches the node | Easier ❌ | Much harder ✅ |
+
+> **Interview one-liner:** "Containers share the node kernel, so we run them as non-root, read-only, with all capabilities dropped; a break-in then stays stuck inside the container."
+
 ### The settings, one by one
+
+**Definition:** a **securityContext** is the part of the Pod YAML where these settings go. Some are set for the whole **Pod**, some per **container**.
 
 | Setting | Where | What it does | Stops |
 |---|---|---|---|
@@ -44,9 +65,29 @@ A container is **not** a virtual machine: it shares the node's Linux kernel. If 
 | `capabilities: drop: ["ALL"]` | Container | Removes every special Linux power (change network, mount, kill other processes...) | Abusing root-like powers |
 | `automountServiceAccountToken: false` | ServiceAccount | No Kubernetes API token in the Pod (Step 04) | Token theft |
 
+**Simple words for 3 tricky ones:**
+
+| Word | Simple meaning | Analogy |
+|---|---|---|
+| **System call** | How a program asks the Linux kernel to do something (open file, start process) | Asking the reception desk |
+| **seccomp** | A list of system calls the container is **not allowed** to make | Some requests the desk always refuses |
+| **Capability** | One piece of root's power (e.g. `NET_ADMIN` = change the network) | One key from root's key ring |
+
 ### Read-only root filesystem: but apps need to write somewhere!
 
-Some apps must write small temporary files. We give them **only** those folders, as `emptyDir` volumes (a fresh, empty folder that disappears with the Pod):
+**Definition:** `readOnlyRootFilesystem: true` makes the whole container disk **read-only**. An **`emptyDir`** volume is a small, fresh, empty folder that **is** writable and disappears with the Pod.
+
+- An attacker can't **download tools** or **change the app code**, because nothing can be written.
+- But some apps must write small **temporary** files (nginx, Node.js).
+- So we mount `emptyDir` **only** on those folders. Everything else stays read-only.
+
+**Analogy 📓:** the app gets a **printed book** (can't be changed) plus a small **notepad** for scribbles. The notepad is thrown away when the Pod stops.
+
+```
+Container filesystem
+/app, /etc, /usr ...   🔒 read-only   (attacker can't change anything)
+/tmp                   ✏️ emptyDir    (temp files only, deleted with the Pod)
+```
 
 | App | Writable folders | Why |
 |---|---|---|
@@ -54,19 +95,28 @@ Some apps must write small temporary files. We give them **only** those folders,
 | backend (Node.js) | `/tmp` | Node temp files |
 | mysql | `/var/lib/mysql` (EBS), `/var/run/mysqld`, `/tmp`, `/var/lib/mysql-files` | Data, socket file, temp files |
 
-Everything else, like the app code and `/etc`, is read-only.
+> **Interview one-liner:** "We run with a read-only root filesystem and give apps small emptyDir volumes only where they must write, like /tmp."
 
 ### Pod Security Standards (PSS) and Pod Security Admission (PSA)
 
-Kubernetes has 3 ready-made security levels, the **Pod Security Standards**:
+**Definition:** **PSS** = 3 ready-made security levels written by Kubernetes. **PSA** = the built-in checker that **enforces** a level on a namespace.
+
+- You **label a namespace** with a level (e.g. `restricted`).
+- Every new Pod in that namespace is **checked** before it starts.
+- A Pod that breaks the rules (e.g. runs as root) is **rejected**.
+
+**Analogy 🚪:** PSS is the **dress code** (casual / smart / formal). PSA is the **doorman** who checks it. Our namespace has the strictest dress code.
+
+```
+kubectl apply bad-pod (root) ──► PSA checks namespace label "restricted" ──► ❌ rejected
+kubectl apply our Pod        ──► PSA checks                               ──► ✅ created
+```
 
 | Level | Meaning | Use for |
 |---|---|---|
 | `privileged` | No limits | System tools (CNI, CSI drivers) |
 | `baseline` | Blocks the obvious dangers (privileged, host network) | Most legacy apps |
 | `restricted` | **Strictest**: non-root, drop ALL, no escalation, seccomp | **Our app** ✅ |
-
-**Pod Security Admission** is the built-in checker that applies a level to a **namespace**, using labels:
 
 | Label | Effect |
 |---|---|
@@ -75,7 +125,13 @@ Kubernetes has 3 ready-made security levels, the **Pod Security Standards**:
 | `pod-security.kubernetes.io/audit: restricted` | Written to the audit log |
 | `...-version: latest` | Use the rules of the current Kubernetes version |
 
-> PSA checks only **security settings**. Rules like "only images from our ECR" need a policy engine: **Kyverno** (Step 07).
+| | PSA (this step) | **Kyverno** (Step 07) |
+|---|---|---|
+| Checks | Only security settings | Any rule you write |
+| Example | "No root" | "Only images from our ECR", "must be signed" |
+| Install | Built in ✅ | Extra tool |
+
+> **Interview one-liner:** "Pod Security Admission enforces the Pod Security Standards per namespace with labels; we use `restricted`, so root or privileged Pods are rejected."
 
 ## 1.2 The code
 
