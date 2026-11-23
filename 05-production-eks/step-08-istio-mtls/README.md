@@ -35,13 +35,39 @@ ALB ──plain HTTP──► frontend ══mTLS══► backend ══mTLS═
 
 **Definition:** a layer that handles **service-to-service traffic** for you: encryption, identity, access rules and traffic metrics, **without changing the app code**.
 
+- Pods talk to each other all the time: frontend → backend → mysql.
+- A mesh puts a **small helper** on the path of that traffic.
+- The helper **encrypts** it, **checks who is calling**, and **blocks** callers that aren't allowed. The app doesn't notice.
+
 **Analogy 🏢:** an office where every internal letter goes in a **sealed envelope** (encryption), with the **sender's ID card** checked (identity), and a **guard list** at each door: "the database room accepts letters only from the backend team" (authorization).
 
 ### Why do we need it? Isn't the cluster private?
 
-Without a mesh, Pod-to-Pod traffic is **plain text**, and **any Pod can call any Pod**. If one Pod is hacked, the attacker can read traffic or connect directly to MySQL. Production rule: **zero trust**. Don't trust the network; check every connection.
+**Definition:** **zero trust** = never trust a connection just because it comes from **inside** the network. Check **every** connection.
+
+- Without a mesh, Pod-to-Pod traffic is **plain text** (anyone on the path can read it).
+- **Any Pod can call any Pod**, even MySQL directly.
+- If **one** Pod is hacked, the attacker can read traffic or connect straight to the database.
+
+```
+Without mesh                              With mesh (our setup)
+hacked Pod ──plain text──► mysql ✅ 😱      hacked Pod ──► mysql ❌ "not allowed"
+frontend ──plain text──► backend           frontend ══mTLS 🔒══► backend ══mTLS 🔒══► mysql
+```
+
+| | No mesh | **Istio mesh** |
+|---|---|---|
+| Traffic between Pods | Plain text ❌ | Encrypted (mTLS) ✅ |
+| Who may call MySQL | Any Pod ❌ | Only backend ✅ |
+| App code changes | — | None ✅ |
+
+> **Interview one-liner:** "Inside a cluster any Pod can reach any Pod in plain text; a service mesh adds mTLS and identity-based allow-lists for zero trust, without code changes."
 
 ### mTLS (mutual TLS)
+
+**Definition:** **TLS** encrypts a connection (the 🔒 in HTTPS). **mTLS** = **mutual** TLS: **both** sides show a certificate, so each side knows **exactly who** the other is.
+
+**Analogy 🪪:** normal TLS is a shop showing **its** licence to you. mTLS is **both** of you showing ID cards before talking.
 
 | | Normal TLS (HTTPS website) | **mTLS** |
 |---|---|---|
@@ -51,7 +77,18 @@ Without a mesh, Pod-to-Pod traffic is **plain text**, and **any Pod can call any
 
 The identity comes from the **ServiceAccount** (Step 04). Istio issues short-lived certificates to each workload and rotates them automatically.
 
+> **Interview one-liner:** "mTLS means both client and server present certificates; Istio gives each ServiceAccount its own certificate and rotates it automatically."
+
 ### Sidecar vs ambient
+
+**Definition:** 2 ways Istio puts its helper proxy on the traffic path. **Sidecar** = an extra proxy container **inside every Pod**. **Ambient** = **one shared proxy per node** (called **ztunnel**).
+
+**Analogy 🚌:** sidecar = every passenger gets their **own bodyguard**. Ambient = **one guard per bus** protects everyone on it.
+
+```
+Sidecar:   [ app + envoy ]  [ app + envoy ]  [ app + envoy ]     ← proxy in every Pod
+Ambient:   [ app ]  [ app ]  [ app ]  ──── ztunnel (1 per node)  ← Pods untouched ✅
+```
 
 | | Sidecar mode (classic) | **Ambient mode** ✅ (we use it) |
 |---|---|---|
@@ -63,7 +100,15 @@ The identity comes from the **ServiceAccount** (Step 04). Istio issues short-liv
 
 Ambient is the better fit for our hardened namespace.
 
+> **Interview one-liner:** "We use Istio ambient mode: a per-node ztunnel does mTLS, so Pods need no sidecar and still pass Pod Security restricted."
+
 ### The 4 Istio parts we install
+
+**Definition:** Istio is split into a **control plane** (the brain: hands out certificates and rules) and a **data plane** (the workers: actually encrypt and check traffic).
+
+```
+istiod (brain 🧠) ──certificates + rules──► ztunnel on every node (workers 💪) ──► mTLS between Pods
+```
 
 | Chart | Runs as | Job |
 |---|---|---|
@@ -74,6 +119,16 @@ Ambient is the better fit for our hardened namespace.
 
 ### PeerAuthentication and AuthorizationPolicy
 
+**Definition:** 2 Istio rules. **PeerAuthentication** = *"you must come encrypted"*. **AuthorizationPolicy** = *"and only these callers may come in"*.
+
+**Analogy 🚪:** PeerAuthentication = **"show your ID card at the door"**. AuthorizationPolicy = **the guest list** at that door.
+
+```
+frontend ──mTLS──► backend ──mTLS──► mysql
+other Pod ───────► backend ❌ not on the list
+other Pod ─────────────────────────► mysql ❌ not on the list
+```
+
 | Object | Question | Our setting |
 |---|---|---|
 | **PeerAuthentication** | *Must* callers use mTLS? | `STRICT` on backend and mysql: plain text is refused |
@@ -83,7 +138,13 @@ Ambient is the better fit for our hardened namespace.
 
 **Health checks:** kubelet probes are handled by ambient automatically, so they keep working with STRICT.
 
+> **Interview one-liner:** "PeerAuthentication STRICT forces mTLS; AuthorizationPolicy allows only named ServiceAccounts, so mysql accepts connections from backend only."
+
 ### Mesh vs NetworkPolicy
+
+**Definition:** a **NetworkPolicy** is Kubernetes' built-in **firewall** between Pods, based on **labels / IPs**. Istio's AuthorizationPolicy is based on **certificates** (who you really are).
+
+**Analogy 🏠:** NetworkPolicy checks the **house address** a letter came from. Istio checks the **signature** on it. An address can be faked more easily than a signature.
 
 | | Kubernetes NetworkPolicy | Istio AuthorizationPolicy |
 |---|---|---|
@@ -92,6 +153,8 @@ Ambient is the better fit for our hardened namespace.
 | On EKS | Needs the VPC CNI network policy feature turned on | Works with ambient |
 
 Many companies use **both** (defence in depth). We use Istio here.
+
+> **Interview one-liner:** "NetworkPolicy filters by IP and labels without encryption; Istio authorizes by certificate identity and encrypts with mTLS, and many teams use both."
 
 ## 1.2 The code, file by file
 
