@@ -311,11 +311,37 @@ serviceAccount:
 | `replicaCount: 2` | Two copies on the system nodes: one can fail |
 | `serviceAccount.name` | **Must match** the Pod Identity association, or the controller gets no AWS permissions |
 
+**In simple steps:**
+1. This file holds the **settings** for the controller's Helm install (Task 3).
+2. It tells the controller **which cluster** and **which region** it works for.
+3. It runs **2 copies**, so the ALB keeps being managed if one Pod dies.
+4. It creates the ServiceAccount with the **exact name** Terraform's association expects. That's how the controller Pods get the AWS role.
+
 ### `platform/k8s/namespace.yaml`
 
 Creates `three-tier` with **Pod Security Standards = restricted** labels. Step 05 explains them; the chart is already built to pass them.
 
+**In simple steps:**
+1. Creates the **namespace** `three-tier`, the "folder" where all app objects live.
+2. Adds the label `pod-security.kubernetes.io/enforce: restricted`, the strictest security level.
+3. From now on, any Pod in this namespace that runs as **root** or has extra powers is **rejected**.
+4. Our chart already uses non-root users and drops all powers (the `_helpers.tpl` security snippets), so it passes.
+
 ### The Helm chart `helm/three-tier`
+
+**Definition:** our chart is **one folder** that holds the whole app: `values.yaml` (the settings) + `templates/` (YAML files with blanks). `helm install` fills the blanks and creates every object in one go.
+
+```
+helm install three-tier ./helm/three-tier --set global.registry=$ECR
+        │
+        ▼  fills the blanks in templates/ with values.yaml (+ your --set)
+┌─────────────────────────────── namespace three-tier ───────────────────────────────┐
+│ Ingress ──► Service frontend ──► frontend ×2 ──► Service backend ──► backend ×2    │
+│ (→ ALB)                                                    │                        │
+│                                         ConfigMap + mysql-secret ──► mysql-0 ──► PVC ──► EBS gp3
+│ 3 ServiceAccounts · 2 PodDisruptionBudgets · StorageClass gp3 (cluster-wide)        │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 | File | Creates | Key points |
 |---|---|---|
@@ -330,7 +356,36 @@ Creates `three-tier` with **Pod Security Standards = restricted** labels. Step 0
 | `templates/ha.yaml` | 2 PodDisruptionBudgets (+ HPA later) | Step 09 |
 | `templates/externalsecret.yaml`, `mesh.yaml`, `servicemonitor.yaml` | nothing yet | Switched off until Steps 06, 08, 11 |
 
-The scheduling snippet every app Pod gets:
+Each file, in simple steps:
+
+#### 1. `values.yaml`: the settings (one place to change things)
+
+1. Holds **every setting**: image names and tags, replicas, CPU/memory, disk size.
+2. Has **on/off switches** for later steps: `externalSecret.enabled`, `mesh.enabled`, `autoscaling.enabled`, `metrics.serviceMonitor.enabled` (all `false` now).
+3. `global.registry: ""` is **empty on purpose**. You give it at install time with `--set global.registry=$ECR`, so your **account ID never goes into Git**.
+
+```yaml
+global:
+  registry: ""          # ← filled by --set at install time
+backend:
+  image: { repository: prod-backend, tag: v1 }
+  replicas: 2
+```
+
+#### 2. `templates/_helpers.tpl`: shared snippets (write once, use everywhere)
+
+**Definition:** a **helper** is a named piece of YAML that other templates **paste in** with `include`. Change it once and every Pod gets the change.
+
+| Snippet | What it pastes in | Used by |
+|---|---|---|
+| `three-tier.labels` | Standard labels (`part-of`, `managed-by`, chart version) | Every object |
+| `three-tier.image` | `<registry>/<repository>:<tag>`; **stops the install** if the registry is missing | frontend, backend |
+| `three-tier.scheduling` | nodeSelector + toleration → run on **app nodes** | All 3 tiers |
+| `three-tier.spread` | Spread copies across **AZs and nodes** (Step 09) | frontend, backend |
+| `three-tier.podSecurity` | Non-root user ID, seccomp (Step 05) | All 3 tiers |
+| `three-tier.containerSecurity` | Read-only filesystem, drop ALL, no escalation (Step 05) | All 3 tiers |
+
+**The scheduling snippet every app Pod gets:**
 
 ```yaml
 nodeSelector:
@@ -342,12 +397,113 @@ tolerations:
     effect: NoSchedule
 ```
 
-The image name is built like this, and the install **fails on purpose** if you forget the registry:
+1. `nodeSelector: role: app` → the Pod may **only** go to nodes with the label `role=app`.
+2. App nodes have a **taint** (`workload=app:NoSchedule`, Step 01) = a "keep out" sign.
+3. The **toleration** is the **pass** that lets our Pods ignore that sign.
+4. Together: our app goes **only** to app nodes, and **only** our app goes there.
+
+**The image name** is built like this, and the install **fails on purpose** if you forget the registry:
 
 ```
 {{ required "Set global.registry ..." .Values.global.registry }}/prod-backend:v1
    → 123456789012.dkr.ecr.us-east-1.amazonaws.com/prod-backend:v1
 ```
+
+`required` = *"if this value is empty, stop with this message"*. Better a clear error now than Pods stuck in `ImagePullBackOff` later.
+
+#### 3. `templates/serviceaccounts.yaml`: one identity per tier
+
+1. A `range` loop creates **3 ServiceAccounts**: `frontend`, `backend`, `mysql`.
+2. Each Pod uses its own one (`serviceAccountName: backend`).
+3. `automountServiceAccountToken: false` → **no Kubernetes API token** inside the Pods (Step 04).
+4. Later, Istio (Step 08) uses these names to decide **who may talk to whom**.
+
+#### 4. `templates/frontend.yaml`: the website (nginx)
+
+Creates a **Deployment** (2 Pods) + a **Service**.
+
+1. **Deployment** runs 2 nginx Pods on app nodes, spread across AZs, as user **101** (not root).
+2. `BACKEND_URL=http://backend:8080` → nginx forwards `/api` calls to the backend **Service**.
+3. **Probes** on `/healthz`: no traffic until nginx answers; restart if it stops answering.
+4. **Read-only** filesystem + 2 small writable `emptyDir` folders (`/tmp`, `/etc/nginx/conf.d`).
+5. **Service** `frontend` (type **ClusterIP** = inside the cluster only) gives the 2 Pods one stable name. The ALB reaches it through the Ingress.
+
+```
+Ingress (ALB) ──► Service frontend :80 ──► frontend Pod :8080  (×2)
+```
+
+#### 5. `templates/ingress.yaml`: the door from the internet
+
+1. Creates an **Ingress** named `frontend`: *"all traffic for `/` → Service `frontend`"*.
+2. `ingressClassName: alb` → the **AWS Load Balancer Controller** picks it up and builds the **ALB**.
+3. Annotations tell the controller **how** to build it:
+
+| Annotation | Means |
+|---|---|
+| `scheme: internet-facing` | Public ALB, in the public subnets |
+| `target-type: ip` | Send traffic straight to Pod IPs |
+| `healthcheck-path: /healthz` | ALB checks this path before sending traffic |
+| `listen-ports: [{"HTTP": 80}]` | Listen on port 80 |
+
+#### 6. `templates/backend.yaml`: the API (Node.js)
+
+Creates a **ConfigMap** + a **Deployment** (2 Pods) + a **Service**.
+
+1. **ConfigMap** `backend-config` = the **non-secret** settings: `DB_HOST=mysql`, `DB_PORT=3306`, `DB_NAME`, `DB_USER`.
+2. **Deployment** loads them all as env variables (`envFrom`), plus `DB_PASSWORD` from the **Secret** `mysql-secret` (never in the ConfigMap).
+3. **readiness** = `/api/ready` → *"can I reach MySQL?"*. If not, no traffic, but **no restart**.
+4. **liveness** = `/api/health` → *"is the process alive?"*. It does **not** check the DB, so a DB outage doesn't cause a restart storm.
+5. **Service** `backend` (ClusterIP, port 8080) → only reachable **inside** the cluster, by the frontend.
+6. `rollout.enabled: false` → a normal Deployment now; in **Step 10** the same file becomes an Argo **Rollout** (canary).
+
+| Setting | Comes from | Why |
+|---|---|---|
+| `DB_HOST`, `DB_USER`… | ConfigMap | Not secret, easy to change |
+| `DB_PASSWORD` | Secret `mysql-secret` | Secret: never in Git or the ConfigMap |
+
+#### 7. `templates/mysql.yaml`: the database
+
+Creates a **headless Service** + a **StatefulSet** (1 Pod: `mysql-0`).
+
+**Definition:** a **StatefulSet** is like a Deployment, but for apps that keep **data**. Each Pod gets a **fixed name** (`mysql-0`) and **its own disk** that follows it.
+
+1. **Headless Service** (`clusterIP: None`) → the DNS name `mysql` points **straight** to the Pod. That's the `DB_HOST` the backend uses.
+2. **StatefulSet** runs `mysql-0` as user **999**, on app nodes.
+3. Passwords come from the Secret `mysql-secret` (keys `password`, `root-password`).
+4. **`volumeClaimTemplates`** → creates PVC `data-mysql-0` (5 GiB, class `gp3`) → the EBS CSI driver creates the **EBS disk**.
+5. `--datadir=/var/lib/mysql/data` → data goes in a **sub-folder**, because a new EBS disk has a `lost+found` folder and MySQL wants an **empty** folder.
+6. **readiness** = `mysqladmin ping` (DB answers?), **liveness** = port 3306 open.
+
+| | Deployment (frontend, backend) | **StatefulSet** (mysql) |
+|---|---|---|
+| Pod names | Random (`backend-7d9f-abcde`) | Fixed (`mysql-0`) ✅ |
+| Disk | None (stateless) | Own PVC per Pod, kept on restart ✅ |
+| Use for | Apps without data | Databases |
+
+#### 8. `templates/storageclass.yaml`: the disk type
+
+1. Creates StorageClass **`gp3`** (cluster-wide). The EBS CSI driver (`ebs.csi.aws.com`) uses it.
+2. `encrypted: "true"` → data on the disk is **encrypted**.
+3. `WaitForFirstConsumer` → the disk is created **only when the Pod is scheduled**, in **the same AZ** as the Pod.
+4. `reclaimPolicy: Delete` → deleting the PVC **deletes** the EBS disk (no forgotten disks billing you).
+5. `allowVolumeExpansion: true` → you can make the disk bigger later.
+
+#### 9. `templates/ha.yaml`: protection during maintenance
+
+1. A loop creates **2 PodDisruptionBudgets** (frontend, backend): `maxUnavailable: 1` → during a node drain, **at most 1 Pod** of each is down at a time.
+2. An **HPA** is also in this file but **off** (`autoscaling.enabled: false`). Step 09 turns it on.
+
+#### 10. `externalsecret.yaml`, `mesh.yaml`, `servicemonitor.yaml`: switched off
+
+Each starts with `{{- if .Values.<switch>.enabled }}`. The switch is `false`, so Helm creates **nothing** from them yet.
+
+| File | Switch | Turned on in |
+|---|---|---|
+| `externalsecret.yaml` | `externalSecret.enabled` | Step 06 (password from Secrets Manager) |
+| `mesh.yaml` | `mesh.enabled` | Step 08 (Istio mTLS rules) |
+| `servicemonitor.yaml` | `metrics.serviceMonitor.enabled` | Step 11 (Prometheus) |
+
+> **Interview one-liner:** "One Helm chart deploys the whole 3-tier app: shared helpers give every Pod the same scheduling and security settings, the registry is injected with `--set` so no account ID is in Git, and later features are values switches."
 
 ---
 
