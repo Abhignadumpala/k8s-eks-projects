@@ -927,6 +927,45 @@ module "vpc" {
 
 > Without those subnet tags, a `Service type: LoadBalancer` or an Ingress can't find where to create the load balancer.
 
+#### One NAT gateway for all 3 AZs: how does it work?
+
+**NAT gateway** = a door that lets machines in private subnets go **out** to the internet (pull images, call AWS APIs), while nobody from the internet can come **in**.
+
+- Terraform creates **1 NAT** in one public subnet (`10.0.1.0/24`, us-east-1a).
+- Each private subnet has a **route table** (a signpost: "internet traffic goes here"). With `single_nat_gateway = true`, **all 3 signposts point to the same NAT**: `0.0.0.0/0 → nat-xxxx`.
+- Traffic between AZs inside one VPC is allowed, so nodes in 1b and 1c reach the NAT in 1a.
+
+**Analogy:** 3 houses on a street share **one gate** to the main road. Cheaper than 3 gates, but if that gate is blocked, nobody gets out.
+
+```
+             Internet
+                 ▲
+                 │
+          ┌──────┴──────┐
+          │ NAT Gateway │  (public subnet, us-east-1a)
+          └──────▲──────┘
+     ┌───────────┼────────────┐
+     │           │            │
+┌────┴────┐ ┌────┴────┐ ┌─────┴───┐
+│ private │ │ private │ │ private │
+│   1a    │ │   1b    │ │   1c    │
+└─────────┘ └─────────┘ └─────────┘
+ route table: 0.0.0.0/0 → same NAT (all 3)
+```
+
+⚠️ **The risk:** if **us-east-1a goes down**, the NAT goes down with it. Nodes in 1b and 1c still run but **can't reach the internet** (no image pulls, no AWS API calls).
+
+| | This lab (`single_nat_gateway = true`) | Production (one NAT per AZ) |
+|---|---|---|
+| NATs | 1 | 3 |
+| Cost | ~$0.045/h | ~$0.135/h (3×) |
+| If 1a fails | ❌ All private subnets lose internet | ✅ 1b and 1c keep their own NAT |
+| Cross-AZ data charge | ❌ Yes (1b/1c → NAT in 1a) | ✅ No, traffic stays in its AZ |
+| Route tables | All 3 → same NAT | Each → its own AZ's NAT |
+| Terraform | `single_nat_gateway = true` | `single_nat_gateway = false` + `one_nat_gateway_per_az = true` |
+
+> **Interview one-liner:** "One NAT for all AZs saves cost but is a single point of failure: if its AZ fails, every private subnet loses outbound internet. In production we use one NAT per AZ so each AZ is independent."
+
 #### The subnet tags, explained
 
 **Tags** are labels (key = value) on AWS resources. Usually they are only for humans (`Name`, `Project`). These ones are different: **Kubernetes reads them** to make decisions.
