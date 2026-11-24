@@ -233,6 +233,17 @@ data "aws_iam_policy_document" "github_ci_trust" {
 | `sub = repo:<owner>/<repo>:ref:refs/heads/main` | **Only** our repo, **only** main. Forks and feature branches get nothing |
 | (role policy) | `GetAuthorizationToken` + push actions on the 2 repos only. It can't delete images, can't touch EKS |
 
+**In simple steps:**
+1. **OIDC provider:** tells AWS *"trust ID tokens signed by GitHub"* (one per AWS account).
+2. **Trust policy:** the role may be used **only** with a GitHub token that is (a) made for AWS (`aud`) and (b) from **our repo, main branch** (`sub`).
+3. **Role policy:** ECR login + **push** to our 2 repos only. It can't delete images and can't touch EKS.
+4. Result: GitHub Actions gets **1-hour** AWS credentials, with **no keys stored** in GitHub.
+
+```
+GitHub run (repo X, main) ──signed token──► AWS STS ──checks aud + sub──► ✅ 1-hour creds (push to ECR only)
+fork / other branch       ──signed token──► AWS STS ──sub doesn't match──► ❌ denied
+```
+
 ### `gitops/values-prod.yaml`
 
 ```yaml
@@ -256,6 +267,12 @@ metrics:
 ```
 
 Every switch from Steps 06–09 is **written down in Git** now, not hidden in `--reuse-values`. That's the GitOps idea: the file **is** the production config.
+
+**In simple steps:**
+1. The **production settings file** that Argo CD reads (on top of the chart's `values.yaml`).
+2. Turns **on** every feature from Steps 06–09: External Secret, mesh, autoscaling, Argo Rollouts canary.
+3. Holds the **image tags**. CI changes only these 2 lines after each good build.
+4. Want to change production? **Edit this file and push.** Argo CD does the rest.
 
 ### `platform/argocd/three-tier-app.yaml`
 
@@ -293,6 +310,17 @@ spec:
 | `parameters: global.registry` | Your ECR address, filled in by `envsubst` on the bastion (not in Git) |
 | `destination.server` | The cluster Argo CD runs in |
 | `automated` + `prune` + `selfHeal` | Sync by itself, delete removed objects, undo manual changes |
+
+**In simple steps:**
+1. Creates an Argo CD **Application** named `three-tier`.
+2. **Source:** our GitHub repo, branch `main`, folder `05-production-eks/helm/three-tier` (the chart), with `values-prod.yaml`.
+3. **Destination:** this same cluster, namespace `three-tier`.
+4. **Your ECR address** is added as a parameter by `envsubst` on the bastion, so it's never in Git.
+5. **Automated sync:** Argo CD applies changes by itself, **deletes** objects removed from Git (`prune`), and **undoes** manual changes (`selfHeal`).
+
+```
+GitHub main: helm/three-tier + values-prod.yaml ──Argo CD pulls──► cluster namespace three-tier
+```
 
 ### The CI workflow: `.github/workflows/prod-eks-ci.yml`
 
@@ -426,6 +454,22 @@ jobs:
 | `docker inspect ... RepoDigests` | After the push, the exact `image@sha256:...` to sign |
 | `--key env://COSIGN_PRIVATE_KEY` | Cosign reads the key from the env var (from GitHub secrets, never written to disk) |
 | `yq -i '... = strenv(TAG)'` | Changes **only** the 2 tag lines in the YAML |
+
+**In simple steps:** on every push to `main` that changes app code, 3 jobs run **in order**.
+1. **`test`:** run the backend unit tests. Fail → stop, no image is built.
+2. **`build-scan-sign-push`** (frontend + backend in parallel):
+   1. Log in to AWS with **OIDC** (no keys) and to ECR.
+   2. **Build** the image, tagged with the first **7 characters of the commit** (e.g. `a1b2c3d`).
+   3. **Scan** with Trivy. HIGH/CRITICAL found → stop, nothing is pushed.
+   4. **Push** to ECR.
+   5. **Sign** the image's **digest** with Cosign (key from GitHub secrets).
+3. **`update-gitops`:** change the 2 image tags in `gitops/values-prod.yaml` and **commit** them. Argo CD sees the commit and starts the **canary**.
+
+```
+git push (app code)
+   └► test ──► build ──► Trivy ──► push ECR ──► cosign sign ──► commit new tag to gitops/ ──► Argo CD ──► canary 🐤
+        ❌ stop   ❌ stop if HIGH/CRITICAL
+```
 
 ---
 
