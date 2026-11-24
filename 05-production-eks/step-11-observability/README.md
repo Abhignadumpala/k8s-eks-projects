@@ -177,9 +177,20 @@ kubeEtcd:
 | `kubeControllerManager/kubeScheduler/kubeEtcd: false` | EKS runs these in AWS's account: Prometheus can't reach them, so it would raise false "target down" alerts |
 | Grafana password | Not set here: the chart **generates** one and stores it in a Secret |
 
+**In simple steps:**
+1. Keep only **2 days** of metrics (enough for a lab, small disk).
+2. Read **every** ServiceMonitor and alert rule in the cluster, including **ours** in `three-tier`.
+3. Turn **off** checks for the control-plane parts (controller manager, scheduler, etcd). AWS runs them where Prometheus can't reach, so they would only cause false alerts.
+4. Ask for a modest amount of CPU/memory so it fits on the system nodes.
+
 ### `helm/three-tier/templates/servicemonitor.yaml`
 
 Rendered only when `metrics.serviceMonitor.enabled: true`. Selects the backend Service, port `http`, path `/metrics`, every 30 s.
+
+**In simple steps:**
+1. Turned on with `metrics.serviceMonitor.enabled: true` (a Git commit in Task 3).
+2. Tells Prometheus: *"scrape the **backend** Service, port `http`, path `/metrics`, every **30 s**"*.
+3. After that, `http_requests_total` from our app appears in Prometheus and Grafana.
 
 ### `platform/k8s/alerts.yaml`
 
@@ -214,6 +225,16 @@ spec:
 | `> 0.05` | More than 5% |
 | `for: 2m` | Must stay true for 2 minutes (no alerts for a 10-second blip) |
 | `severity: critical` | Alertmanager can route critical alerts to on-call |
+
+**In simple steps:** 2 alert rules, checked by Prometheus all the time.
+1. **`BackendHighErrorRate`:** if **more than 5%** of requests in the last 5 min are **5xx errors**, for **2 minutes** in a row → alert (critical).
+2. **`BackendDown`:** if Prometheus can reach **zero** backend Pods for **2 minutes** → alert.
+3. A firing alert goes to **Alertmanager**, which can send it to Slack, email or PagerDuty.
+
+```
+Prometheus checks the rule every 30s ──► true for 2 min ──► 🔔 FIRING ──► Alertmanager ──► on-call
+                                     └─► false          ──► ✅ nothing
+```
 
 ---
 
