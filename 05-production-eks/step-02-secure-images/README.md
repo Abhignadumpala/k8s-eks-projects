@@ -273,6 +273,13 @@ EXPOSE 8080
 | `BACKEND_URL` | Where `/api/` calls are forwarded. Kubernetes sets it to the backend Service |
 | `templates/default.conf.template` | At start, nginx fills `${BACKEND_URL}` in and writes the real config |
 
+**In simple steps:**
+1. Start from **nginx-unprivileged**: nginx that already runs as user **101** on port **8080** (no root needed).
+2. Switch to root **only** to install Alpine security fixes, then go back to user 101.
+3. Set the default `BACKEND_URL` (Kubernetes overrides it with the real backend Service).
+4. Copy in the **config template** and the **web page**.
+5. No `CMD` line: the base image already starts nginx.
+
 ### `app/frontend/default.conf.template`
 
 | Block | Explained |
@@ -281,6 +288,18 @@ EXPOSE 8080
 | `location /` | Serves `index.html` (the page you see) |
 | `location /api/` → `proxy_pass ${BACKEND_URL}` | Sends API calls to the backend (tier 1 → tier 2) |
 | `location = /healthz` | Always answers `ok`: used by Kubernetes probes and the ALB health check |
+
+**In simple steps:**
+1. When the container starts, nginx **fills in** `${BACKEND_URL}` and writes the real config file.
+2. A visitor opens `/` → nginx sends back `index.html` (the page).
+3. The page calls `/api/...` → nginx **forwards** it to the backend (tier 1 → tier 2).
+4. `/healthz` always says `ok` → Kubernetes and the ALB use it to check nginx is alive.
+
+```
+browser ──/──────► nginx ──► index.html
+browser ──/api/──► nginx ──proxy_pass──► backend:8080
+ALB/kubelet ──/healthz──► nginx ──► "ok"
+```
 
 ### `app/backend/server.js` (unchanged from the 04 lab)
 
@@ -291,9 +310,25 @@ EXPOSE 8080
 | `GET/POST/DELETE /api/tasks` | the web page | The app itself (a task list stored in MySQL) |
 | `GET /metrics` | Prometheus (Step 11) | Request counters |
 
+**In simple steps:**
+1. A small **Node.js (Express) API** that stores a **task list** in MySQL.
+2. The web page calls `/api/tasks` to list, add and delete tasks.
+3. Kubernetes calls `/api/health` (alive?) and `/api/ready` (can I reach MySQL?).
+4. Prometheus reads `/metrics` (how many requests, which status codes).
+
 ### `app/docker-compose.yml`
 
 Runs all 3 tiers on your laptop to test the images **before** pushing. The passwords in it are local-only test values; in EKS the passwords come from AWS Secrets Manager (Step 06).
+
+**In simple steps:**
+1. **One file** that starts all 3 containers on your laptop: frontend, backend, MySQL.
+2. `docker compose up --build` **builds** the images from the Dockerfiles, then starts them on one private network.
+3. You open `http://localhost:8081` and test the app **before** anything goes to AWS.
+4. If it works locally, you push to ECR. If not, you fix it for free on the laptop.
+
+```
+💻 laptop: localhost:8081 ──► frontend ──► backend :8080 ──► mysql :3306   (test first, then push)
+```
 
 ---
 
