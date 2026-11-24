@@ -246,6 +246,18 @@ module "karpenter" {
 | `AmazonSSMManagedInstanceCore` | Same as our managed nodes: SSM instead of SSH |
 | `iam_policy_statements` | 4 read permissions Karpenter 1.15 uses that this module version doesn't include yet |
 
+**In simple steps:** this module creates **everything Karpenter needs in AWS**.
+1. A **role for the Karpenter controller** (to launch and delete EC2), given to `kube-system/karpenter` with **Pod Identity**.
+2. A **role for the new nodes** (`abhigna-prod-karpenter-node`), plus an access entry so those nodes may **join** the cluster.
+3. An **SQS queue** + EventBridge rules → AWS's **Spot interruption** warnings arrive there.
+4. Extra: SSM for the new nodes (no SSH), and 4 read permissions Karpenter 1.15 needs.
+
+```
+Karpenter Pod ──Pod Identity role──► EC2: launch / delete nodes
+new node      ──node role──────────► joins the cluster, pulls images, SSM
+AWS Spot warning ──EventBridge──► SQS Karpenter-abhigna-prod ──► Karpenter drains the node
+```
+
 ### `platform/values/karpenter.yaml`
 
 ```yaml
@@ -270,6 +282,12 @@ controller:
 | `AWS_REGION` | Pods can't ask IMDS (hop limit 1), so we tell Karpenter the region |
 | `replicas: 2` | One active leader + one standby |
 | Where does it run? | No toleration → automatically on the **system** nodes. It must never run on nodes it manages itself |
+
+**In simple steps:**
+1. Tells Karpenter **which cluster** it manages and **which SQS queue** to read.
+2. Uses ServiceAccount `karpenter`, the name Terraform linked to the role.
+3. Runs **2 copies** (one active, one waiting), on the **system nodes**.
+4. Sets the region directly, because Pods can't ask IMDS.
 
 ### `platform/karpenter/nodepool.yaml`
 
@@ -335,6 +353,15 @@ spec:
 | `limits` | **Cost guard**: never more than 16 vCPU / 64 GiB in total from this pool |
 | `consolidationPolicy` + `consolidateAfter: 1m` | Remove empty or underused nodes after 1 minute |
 
+**In simple steps:** 2 objects, the **"how"** and the **"which"**.
+1. **EC2NodeClass `app`** = **how** to build a node: Amazon Linux 2023, the **private** subnets, the node security group, the node IAM role, IMDS hop limit 1 (same safety as Step 01).
+2. **NodePool `app`** = **which** nodes are allowed: Spot or On-Demand, families c/m/r, sizes large/xlarge.
+3. New nodes get the **same label + taint** as the app node group → only app Pods land there.
+4. **Cost guard:** at most **16 vCPU / 64 GiB** in total from this pool.
+5. **Clean up:** empty or underused nodes are removed after **1 minute**; every node is replaced after **30 days** (fresh AMI).
+
+**Analogy 🏗️:** EC2NodeClass is the **building spec** (materials, location); NodePool is the **order form** (sizes allowed, budget limit, when to demolish).
+
 ### `helm/three-tier/templates/ha.yaml` (HPA part, turned on with `autoscaling.enabled=true`)
 
 ```yaml
@@ -358,12 +385,29 @@ spec:
 
 When HPA is on, the chart **stops setting `replicas`** in the Deployments, so Helm/Argo CD and HPA don't fight over the number.
 
+**In simple steps:**
+1. HPA **watches** the backend Deployment's CPU.
+2. Target = **60%** of the CPU **request**. Above it → **add** Pods; below it → remove Pods.
+3. Never fewer than **2**, never more than **10**.
+4. After traffic drops, it waits **120 s** before removing Pods (no flapping up and down).
+5. The same file makes one for the **frontend** too (it's a loop over frontend + backend).
+
 ### `platform/k8s/loadtest.yaml` and `platform/karpenter/inflate.yaml`
 
 | File | Does |
 |---|---|
 | `loadtest.yaml` | 4 busybox Pods calling `/api/tasks` in a loop → backend CPU goes up → HPA |
 | `inflate.yaml` | "Empty" Pods that each reserve 1 CPU on app nodes. Scale it up → Pods don't fit → Karpenter |
+
+**In simple steps:**
+1. **`loadtest.yaml`** = fake users: 4 Pods calling the app non-stop → backend CPU rises → **HPA adds Pods**.
+2. **`inflate.yaml`** = fake big Pods: each reserves **1 CPU** but does nothing. Scale it up → no room on the app nodes → Pods **Pending** → **Karpenter adds a node**.
+3. Delete them → load drops → HPA and Karpenter **scale back down**.
+
+```
+loadtest ──► CPU ↑ ──► HPA: more Pods
+inflate  ──► Pods Pending ──► Karpenter: more nodes
+```
 
 ---
 
