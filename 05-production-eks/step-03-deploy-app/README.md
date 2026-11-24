@@ -226,6 +226,12 @@ resource "aws_iam_role" "lb_controller" {
   assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
 }
 
+resource "aws_iam_role_policy_attachment" "lb_controller" {
+  count      = var.enable_lb_controller ? 1 : 0
+  role       = aws_iam_role.lb_controller[0].name
+  policy_arn = aws_iam_policy.lb_controller[0].arn
+}
+
 resource "aws_eks_pod_identity_association" "lb_controller" {
   count           = var.enable_lb_controller ? 1 : 0
   cluster_name    = module.eks.cluster_name
@@ -240,8 +246,52 @@ resource "aws_eks_pod_identity_association" "lb_controller" {
 | `count = var.enable_lb_controller ? 1 : 0` | An **on/off switch**: 0 copies when false (Step 01), 1 copy when true |
 | `file(".../iam/aws-load-balancer-controller-policy.json")` | The **official** policy for controller v3.6.3, saved in the repo so it always matches the version we install |
 | `assume_role_policy = ...pod_identity_trust` | Trust: *"the EKS Pod Identity service (`pods.eks.amazonaws.com`) may give this role to a Pod"* |
+| `aws_iam_role_policy_attachment` | Puts the policy **on** the role (a role with no policy can do nothing) |
 | `aws_eks_pod_identity_association` | The link: Pods using ServiceAccount `kube-system/aws-load-balancer-controller` get this role |
 | `[0]` | Because of `count`, the resource is a list; `[0]` is the first (only) copy |
+
+#### In simple words: who gets what
+
+**Definition:** we create a **policy** (*what* is allowed), put it on a **role** (*who holds* the permissions), and link the role to the **controller's ServiceAccount** (*which Pods* get it).
+
+```
+Policy (what)  ──attachment──►  Role (holder)  ──association──►  ServiceAccount kube-system/aws-load-balancer-controller
+"manage ALBs"                   trusted only by                       │
+~80 AWS actions                 EKS Pod Identity                      ▼
+                                                          the 2 controller Pods (Helm, Task 3)
+```
+
+| Piece | Attached to | Job |
+|---|---|---|
+| **Policy** | → the role | *What*: ~80 actions, mostly load balancer (ALB, listeners, target groups) + EC2 (security groups, read subnets/VPC) |
+| **Role** | ← the policy | *Holds* the permissions; only EKS Pod Identity may hand it out |
+| **Attachment** | policy ↔ role | Puts the permission list on the role |
+| **Association** | role ↔ `kube-system` + `aws-load-balancer-controller` | Gives the role to **those Pods only** |
+
+**Which Pods?** Only the **2 AWS Load Balancer Controller Pods**. Helm creates them in Task 3 (`replicaCount: 2`), with a ServiceAccount of **exactly** that name. EKS checks **namespace + ServiceAccount** on every new Pod:
+
+| Pod | Namespace | ServiceAccount | Gets the LB role? |
+|---|---|---|---|
+| **aws-load-balancer-controller-…** (×2) | `kube-system` ✅ | `aws-load-balancer-controller` ✅ | **Yes** ✅ |
+| coredns-… | `kube-system` ✅ | `coredns` ❌ | No |
+| backend-… / frontend-… | `three-tier` ❌ | `backend` / `frontend` ❌ | No |
+
+**What the permissions are used for:** when you create the **Ingress**, the controller uses this role to call AWS and builds the **ALB**, its **listener** (port 80), a **target group** (frontend Pod IPs) and a **security group**. It keeps them updated, and **deletes** the ALB when the Ingress is deleted (Step 13).
+
+```
+Terraform gives the role ──► you apply the Ingress ──► controller calls AWS with the role ──► ALB 🌐
+```
+
+| | Controller has the role ✅ | No role ❌ (names don't match) |
+|---|---|---|
+| AWS answers | OK → ALB created | `AccessDenied` |
+| `kubectl get ingress` | **ADDRESS** = ALB DNS name | ADDRESS **empty** |
+
+**Analogy 🏗️:** the policy is a **building permit**, the role is the **company** holding it, and the association is the **ID badge** that names the controller Pods as that company's workers.
+
+**Why not give it to the node role?** Then **every** Pod on the node could create or delete load balancers and security groups. Pod Identity gives it to the controller only (least privilege).
+
+> **Interview one-liner:** "We create an IAM policy with the LB Controller's permissions, attach it to a role trusted only by EKS Pod Identity, and associate that role with the controller's ServiceAccount in kube-system, so only the controller Pods can create ALBs for our Ingresses."
 
 ### `platform/values/aws-load-balancer-controller.yaml`
 
