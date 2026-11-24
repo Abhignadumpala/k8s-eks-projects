@@ -173,6 +173,11 @@ resources:
 | `profile: ambient` | Turn on ambient mode in the control plane |
 | `resources.requests` | Default asks for 500m CPU + 2 GiB: too much for our 2 small system nodes |
 
+**In simple steps:**
+1. Settings for **istiod**, Istio's brain (control plane).
+2. `profile: ambient` → run in **ambient** mode (ztunnel per node, no sidecars).
+3. Ask for **less CPU and memory** than the default, so it fits on our small system nodes.
+
 ### `platform/values/istio-cni.yaml`
 
 ```yaml
@@ -180,6 +185,11 @@ profile: ambient
 ```
 
 ztunnel needs no values: its default tolerations already let it run on **every** node, including the tainted app nodes.
+
+**In simple steps:**
+1. Settings for **istio-cni**, a DaemonSet on every node.
+2. `profile: ambient` → it **redirects** traffic of mesh Pods into the node's **ztunnel**.
+3. That redirect is what lets ambient work **without changing the Pods**.
 
 ### `helm/three-tier/templates/mesh.yaml` (turned on with `mesh.enabled=true`)
 
@@ -239,6 +249,20 @@ spec:
 | `principals: [".../sa/frontend"]` | The caller's identity = namespace + ServiceAccount |
 | `namespaces: ["monitoring"]` | Prometheus (Step 11) may scrape `/metrics` |
 
+**In simple steps:** this file creates **4 rules**.
+1. **PeerAuthentication `backend-strict-mtls`:** backend accepts **only mTLS** (encrypted, with an ID). Plain text is refused.
+2. **PeerAuthentication `mysql-strict-mtls`:** same for mysql.
+3. **AuthorizationPolicy `backend-allow-frontend`:** backend accepts calls **only** from ServiceAccount `frontend` (and from the `monitoring` namespace for Step 11). Everyone else is denied.
+4. **AuthorizationPolicy `mysql-allow-backend`:** mysql accepts calls **only** from ServiceAccount `backend`.
+
+```
+frontend (sa/frontend) ══mTLS══► backend ✅      anyone else ──► backend ❌
+backend  (sa/backend)  ══mTLS══► mysql   ✅      anyone else ──► mysql   ❌ (even frontend)
+Prometheus (ns monitoring) ═════► backend /metrics ✅
+```
+
+The identity `cluster.local/ns/three-tier/sa/frontend` = **namespace + ServiceAccount** (Step 04's ServiceAccounts in action).
+
 ### Joining the mesh: one label
 
 ```bash
@@ -246,6 +270,11 @@ kubectl label namespace three-tier istio.io/dataplane-mode=ambient
 ```
 
 All Pods in the namespace join ambient **without a restart**.
+
+**In simple steps:**
+1. Add the label `istio.io/dataplane-mode=ambient` to the **namespace**.
+2. istio-cni sees it and sends all Pod traffic in that namespace through **ztunnel**.
+3. Pods are **not restarted** and **not changed**. From that moment, their traffic is mTLS.
 
 ---
 
