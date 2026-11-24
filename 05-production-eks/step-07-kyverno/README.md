@@ -221,6 +221,18 @@ spec:
 | `.all(c, ... \|\| ...)` | Every container's image must start with one of the 2 allowed prefixes |
 | `public.ecr.aws/docker/library/` | Official Docker images mirrored by AWS (our MySQL). No Docker Hub rate limits either |
 
+**In simple steps:**
+1. **Which Pods?** Only Pods in namespace `three-tier`, when created or updated.
+2. **Collect** all containers: normal ones **plus** init containers.
+3. **Check** each image: does it start with **our ECR** address, or the official AWS mirror `public.ecr.aws/docker/library/`?
+4. **All pass** → Pod allowed. **One fails** → Pod refused with the message (`Deny`).
+
+```
+image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/prod-backend:v1  ✅ our ECR
+image: public.ecr.aws/docker/library/mysql:8.4                        ✅ official mirror
+image: nginx:1.27   (Docker Hub)                                       ❌ refused
+```
+
 ### `disallow-latest-tag.yaml`
 
 ```yaml
@@ -230,6 +242,17 @@ spec:
 ```
 
 No `:` → no tag (means `latest`). Ends with `:latest` → refused.
+
+**In simple steps:**
+1. Same Pods as above (namespace `three-tier`).
+2. Each image **must have a tag** (a `:`), because no tag silently means `latest`.
+3. The tag **must not be** `latest`.
+
+| Image | Result |
+|---|---|
+| `prod-backend:v1` | ✅ |
+| `prod-backend` (no tag) | ❌ |
+| `prod-backend:latest` | ❌ |
 
 ### `require-resources.yaml`
 
@@ -243,6 +266,13 @@ No `:` → no tag (means `latest`). Ends with `:latest` → refused.
 
 CPU **limit** is not required on purpose: CPU limits cause throttling, while memory limits protect the node from out-of-memory problems.
 
+**In simple steps:**
+1. Every container **must say** how much CPU and memory it needs (**requests**).
+2. Every container **must have** a memory **limit** (the most it may use).
+3. Missing any of them → Pod refused.
+
+**Why:** without requests the scheduler can't plan and HPA can't calculate CPU % (Step 09). Without a memory limit one Pod can eat the whole node's memory.
+
 ### `disallow-aws-keys.yaml`
 
 ```yaml
@@ -253,6 +283,13 @@ CPU **limit** is not required on purpose: CPU limits cause throttling, while mem
 ```
 
 `!has(c.env) || ...` = "no env at all is fine; otherwise none may be named like an AWS key".
+
+**In simple steps:**
+1. Look at every container's **env variables**.
+2. If any is named `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` → **refuse** the Pod.
+3. No env at all is fine.
+
+**Why:** static AWS keys leak (logs, `kubectl describe`). Pods must use **Pod Identity** instead (Step 06).
 
 ### `verify-image-signatures.yaml`
 
@@ -300,13 +337,36 @@ spec:
 | `attestors ... key.data` | Your **public** key. Safe to commit |
 | `verifyImageSignatures(...) > 0` | At least one valid signature from our key |
 
+**In simple steps:**
+1. **Which images?** Only **our** app images: `*.dkr.ecr.us-east-1.amazonaws.com/prod-*`.
+2. Kyverno **logs in to ECR** with its own Pod Identity role (`providers: [amazon]`).
+3. It **downloads the signature** stored next to the image (from Step 02 or CI).
+4. It **checks** the signature with **your public key** (`cosign.pub`, pasted in the policy).
+5. Valid signature → Pod allowed. No signature / wrong key → **refused**. Kyverno down → also **refused** (`failurePolicy: Fail`).
+
+```
+Pod with prod-backend:v1 ──► Kyverno ──ECR──► signature? ──cosign.pub──► ✅ ours → allowed
+                                                                    └──► ❌ not ours → refused
+```
+
 ### `terraform/platform_iam.tf` (Kyverno part)
 
 An IAM role with `ecr:GetAuthorizationToken` (login) and **read-only** actions on our 2 repositories, linked by Pod Identity to `kyverno/kyverno-admission-controller`.
 
+**In simple steps:**
+1. Creates an IAM **role** for Kyverno.
+2. Its policy allows **ECR login** + **read-only** access to our **2 repositories** (to read signatures). No push, no delete.
+3. Pod Identity **links** it to ServiceAccount `kyverno-admission-controller` in namespace `kyverno`.
+4. Turned on with `enable_kyverno_ecr = true` (Task 1).
+
 ### `platform/k8s/policy-test-pod.yaml`
 
 A test Pod that **passes Pod Security "restricted"**, so only Kyverno decides. The image comes from `${TEST_IMAGE}`.
+
+**In simple steps:**
+1. A small test Pod that **already passes** Pod Security `restricted` (non-root, read-only, drop ALL).
+2. So if it's refused, it's **only** because of a **Kyverno** rule, not PSA.
+3. You fill `${TEST_IMAGE}` with `envsubst` to try a **good** image (our ECR) and **bad** ones (Docker Hub, `:latest`, unsigned).
 
 ---
 
