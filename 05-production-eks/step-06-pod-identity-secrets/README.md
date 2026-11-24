@@ -305,6 +305,20 @@ resource "aws_eks_pod_identity_association" "external_secrets" {
 
 > ⚠️ The passwords are also stored in your local `terraform.tfstate`. That's why state files must never be committed (`.gitignore` blocks them). Teams keep state in an encrypted S3 bucket.
 
+**In simple steps:**
+1. Terraform **makes 2 random passwords** (app user + root), 24 characters each.
+2. It creates a secret in **AWS Secrets Manager** called `abhigna-prod/three-tier/mysql`.
+3. It **stores** both passwords in that secret as a small JSON: `{"password": "...", "root-password": "..."}`.
+4. It writes a **policy**: read **only this one secret** (2 actions).
+5. It creates a **role** with that policy (trusted only by EKS Pod Identity) and **links** it to ServiceAccount `external-secrets` in namespace `external-secrets`.
+
+```
+random_password ──► Secrets Manager: abhigna-prod/three-tier/mysql  🏦
+policy "read this 1 secret" ──► role ──association──► external-secrets/external-secrets (ESO Pods)
+```
+
+Nobody ever types or sees the passwords. Terraform makes them, AWS keeps them, ESO delivers them.
+
 ### `platform/values/external-secrets.yaml`
 
 ```yaml
@@ -315,6 +329,11 @@ serviceAccount:
 ```
 
 `name` **must** match the Pod Identity association.
+
+**In simple steps:**
+1. Settings for the ESO Helm install (Task 3).
+2. `installCRDs: true` → also installs ESO's **new object types** (ExternalSecret, ClusterSecretStore).
+3. Creates the ServiceAccount `external-secrets`, with the **exact name** Terraform linked to the role. That's how ESO gets AWS access.
 
 ### `platform/k8s/cluster-secret-store.yaml`
 
@@ -335,6 +354,13 @@ spec:
 | `kind: ClusterSecretStore` | One store for the whole cluster |
 | `service: SecretsManager` | (The other option is `ParameterStore`) |
 | no `auth:` block | Use the controller's **own** credentials = the Pod Identity role |
+
+**In simple steps:**
+1. Tells ESO **where** the secrets live: AWS **Secrets Manager** in **us-east-1**.
+2. "Cluster" = **any namespace** can use this store.
+3. No passwords or keys here: ESO logs in to AWS with its **Pod Identity role**.
+
+**Analogy 🏦:** this file is the **bank's address**. It says where the vault is, not what to take out.
 
 ### `helm/three-tier/templates/externalsecret.yaml`
 
@@ -368,6 +394,20 @@ spec:
 | `target.name: mysql-secret` | The Kubernetes Secret to create: same name as before, so **the app doesn't change** |
 | `creationPolicy: Owner` | ESO owns it: delete the ExternalSecret and the Secret is deleted too |
 | `remoteRef.key` / `property` | Secret name in AWS / the JSON key inside it |
+
+**In simple steps:**
+1. Tells ESO **what** to copy: from AWS secret `abhigna-prod/three-tier/mysql`, take `password` and `root-password`.
+2. ESO **creates** the Kubernetes Secret `mysql-secret` with those 2 keys.
+3. It's the **same name** the app already uses → backend and mysql need **no change**.
+4. Every **1 hour** ESO checks AWS again and updates the Secret if the value changed.
+5. Turned on with `externalSecret.enabled=true` (it's off in Step 03).
+
+```
+AWS: abhigna-prod/three-tier/mysql {password, root-password}
+        │ ESO reads (every 1h) via ClusterSecretStore aws-secrets-manager
+        ▼
+Kubernetes Secret mysql-secret {password, root-password} ──► backend, mysql (unchanged)
+```
 
 ---
 
