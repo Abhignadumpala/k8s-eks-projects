@@ -220,6 +220,16 @@ roleRef:
 | `apiGroups: [""]` | `""` = the core API group (Pods, Services, Secrets...) |
 | `RoleBinding dev-debug-pod-debugger` | Group `dev-debug` gets `pod-debugger` in `three-tier` |
 
+**In simple steps:** this one file creates **3 objects**.
+1. **RoleBinding `dev-readonly-view`:** gives group `dev-readonly` the ready-made `view` role → they can **look** at everything in `three-tier` (not Secrets), and change nothing.
+2. **Role `pod-debugger`:** our own **small** role → read Pods and logs, and port-forward. No exec, no delete, no Secrets.
+3. **RoleBinding `dev-debug-pod-debugger`:** gives that role to group `dev-debug`, again **only** in `three-tier`.
+
+```
+group dev-readonly ──RoleBinding──► ClusterRole view     (built-in)  ─┐
+group dev-debug    ──RoleBinding──► Role pod-debugger    (ours)      ─┴─► only in namespace three-tier
+```
+
 ### The app ServiceAccounts (`helm/three-tier/templates/serviceaccounts.yaml`)
 
 ```yaml
@@ -238,6 +248,12 @@ automountServiceAccountToken: false
 | `range $name := list ...` | Helm loop: one ServiceAccount per tier |
 | `automountServiceAccountToken: false` | No API token inside the Pods |
 | (no RoleBinding anywhere) | These identities have **zero** Kubernetes permissions |
+
+**In simple steps:**
+1. The Helm loop makes **3 ServiceAccounts**: `frontend`, `backend`, `mysql`.
+2. Each one is turned into a Pod's identity (`serviceAccountName`).
+3. `automountServiceAccountToken: false` → **no token** file is put in the Pods.
+4. We create **no RoleBinding** for them → even with a token, they could do **nothing** in the API.
 
 ---
 

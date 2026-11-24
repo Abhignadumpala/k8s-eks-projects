@@ -163,6 +163,12 @@ securityContext:
 | `{{ .uid }}` | 101 for frontend, 1000 for backend, 999 for mysql: the user each image is built for |
 | the rest | See the settings table above |
 
+**In simple steps:**
+1. We write the security settings **once**, as 2 named snippets.
+2. **`podSecurity`** (whole Pod): run as a **fixed non-root user**, give disks that user's group, block dangerous system calls.
+3. **`containerSecurity`** (each container): no gaining extra rights, **read-only** filesystem, **drop all** Linux powers.
+4. Every template pastes them in with `include`, so **all 3 tiers** get the same protection. Change one line here → every Pod changes.
+
 ### How the frontend uses them (`templates/frontend.yaml`)
 
 ```yaml
@@ -184,6 +190,12 @@ securityContext:
 | `nindent 6` | Put it on a new line, indented 6 spaces, so the YAML stays valid |
 | `emptyDir: {}` | Small writable folders for nginx; the rest of the filesystem is read-only |
 
+**In simple steps:**
+1. Paste the **Pod** snippet with user **101** (nginx's user).
+2. Paste the **container** snippet → the filesystem becomes read-only.
+3. nginx must still write a little, so we mount **2 empty writable folders** (`/tmp`, `/etc/nginx/conf.d`).
+4. Backend does the same with user **1000** and `/tmp`; mysql with user **999** and its own folders.
+
 ### `platform/k8s/namespace.yaml` (applied in Step 03)
 
 ```yaml
@@ -196,6 +208,12 @@ metadata:
     pod-security.kubernetes.io/audit: restricted
 ```
 
+**In simple steps:**
+1. **`enforce: restricted`** → any Pod that breaks the strictest rules is **rejected**.
+2. **`warn: restricted`** → `kubectl` also prints a warning, so you see why.
+3. **`audit: restricted`** → it's written to the cluster's audit log.
+4. **`enforce-version: latest`** → use the rules of the current Kubernetes version.
+
 ### `platform/k8s/bad-pod.yaml` (the test)
 
 ```yaml
@@ -206,6 +224,16 @@ metadata:
 ```
 
 `privileged: true` is the most dangerous setting: the container can see and change the **node** itself.
+
+**In simple steps:**
+1. A test Pod that **breaks every rule on purpose**: runs as root (user 0), privileged, allows escalation.
+2. You apply it in Task 3 into `three-tier`.
+3. Pod Security Admission checks the namespace label `restricted` → **rejects** it with a list of violations.
+4. That proves the guard works. Nothing is created.
+
+```
+kubectl apply bad-pod.yaml ──► PSA: "restricted" ──► ❌ Error: runAsUser=0, privileged=true, ...
+```
 
 ---
 
