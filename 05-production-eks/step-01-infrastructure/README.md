@@ -565,6 +565,13 @@ All the code is in [`05-production-eks/terraform/`](../terraform):
 
 ### `providers.tf`: which cloud and which plugins
 
+**In simple steps:**
+1. Says which **Terraform version** and which **plugins (providers)** to download: AWS, Kubernetes, TLS, cloud-init, random.
+2. Sets up the **AWS provider**: region `us-east-1`, and adds the tags `Project` + `ManagedBy=terraform` to **every** resource automatically.
+3. Sets up the **Kubernetes provider**: after the cluster exists, Terraform logs in to it with a token, so it can create the bastion's ClusterRoleBinding.
+
+**Analogy 🧰:** this file picks the **toolbox** before the work starts: which tools (providers), which versions, and which site (region).
+
 ```hcl
 # ───────────────────────────────────────────────
 # providers.tf: which cloud, which region, which plugins
@@ -637,6 +644,13 @@ provider "kubernetes" {
 ---
 
 ### `variables.tf`: the settings
+
+**In simple steps:**
+1. **Declares** every setting the code uses: region, names, network ranges, EKS version, node sizes, ECR repos, and the on/off switches for later steps.
+2. Each variable has a **type** and a **description**; some have a **default**.
+3. It holds **no real values** of yours. Those go in `terraform.tfvars`.
+
+**Analogy 📝:** `variables.tf` is the **blank form** (the questions); `terraform.tfvars` is the **filled-in form** (your answers).
 
 ```hcl
 # ───────────────────────────────────────────────
@@ -766,6 +780,13 @@ variable "ecr_repos" {
 
 ### `terraform.tfvars`: your values
 
+**In simple steps:**
+1. The **only file you edit**: your answers to the questions in `variables.tf`.
+2. Bastion: Ubuntu AMI, size, your **key pair** name, and who may SSH (`ssh_allowed_cidr`, best = your IP `/32`).
+3. Network: VPC `10.0.0.0/16`, **3 AZs**, 3 public + 3 private subnets.
+4. EKS: name `abhigna-prod`, version **1.36**, **2 system + 2 app** nodes (`m7i-flex.large`).
+5. The `enable_...` switches stay **false** in Step 01; each later step turns one on.
+
 ```hcl
 # ───────────────────────────────────────────────
 # terraform.tfvars: YOUR values. This is the only file you need to edit.
@@ -833,6 +854,18 @@ terraform.tfvars    →  "for MY project, cluster_name = abhigna-prod"     ← t
 ---
 
 ### `vpc.tf`: the network
+
+**In simple steps:**
+1. Uses the official **VPC module** to build the whole network in one block.
+2. Creates the **VPC** (`10.0.0.0/16`) with **3 public** and **3 private** subnets, one of each per AZ.
+3. Adds **1 NAT gateway** so private nodes can go **out** to the internet (one only, to save cost; production uses one per AZ).
+4. **Tags** the subnets so the LB Controller knows where to put load balancers: public = internet-facing ALBs, private = internal ones.
+
+```
+VPC 10.0.0.0/16
+├── public  10.0.1-3.0/24    → bastion, NAT, public ALB   (tag role/elb)
+└── private 10.0.101-103.0/24 → worker nodes               (tag role/internal-elb)
+```
 
 ```hcl
 # ───────────────────────────────────────────────
@@ -933,6 +966,20 @@ alb.ingress.kubernetes.io/scheme: internal          # → private subnets
 ---
 
 ### `eks.tf`: the cluster
+
+**In simple steps:**
+1. Uses the official **EKS module** to create the cluster `abhigna-prod` (v1.36) in the **private** subnets.
+2. **Access:** you (the creator) are admin; the **bastion's IAM role** gets an access entry with group `bastion-admin`.
+3. **Add-ons:** Pod Identity agent (Pods get AWS roles) and EBS CSI driver (disks for PVCs, with its own Pod Identity role).
+4. **Node defaults** for all nodes: Amazon Linux 2023, IMDSv2 with **hop limit 1**, and SSM access (no SSH).
+5. **2 node groups:** `system` (label `role=system`) and `app` (label `role=app` + **taint** `workload=app:NoSchedule`), 2 nodes each.
+6. Lets the **bastion** reach the cluster API on port **443**.
+7. Outside the module: the **EBS CSI role**, and a **ClusterRoleBinding** that gives group `bastion-admin` the `cluster-admin` role.
+
+```
+module "eks" ──► control plane (AWS) + add-ons + system ×2 + app ×2 (tainted)
+bastion IAM role ──access entry──► group bastion-admin ──ClusterRoleBinding──► cluster-admin
+```
 
 ```hcl
 # ───────────────────────────────────────────────
@@ -1199,6 +1246,18 @@ kubectl get clusterroles | grep -E "^(cluster-admin|admin|edit|view) "
 
 ### `bastion.tf`: the jump box
 
+**In simple steps:**
+1. **Security group:** allow **SSH (22)** only from `ssh_allowed_cidr`; allow all traffic **out**.
+2. **IAM role** for the EC2 machine, with only: **read EKS** (describe/list clusters and node groups) + **read ECR**.
+3. **Instance profile:** the "holder" that attaches that role to an EC2 machine.
+4. **The EC2 instance:** Ubuntu in a **public** subnet, with a public IP, your key pair, and an **encrypted** 30 GB disk.
+5. **`user_data`:** on first boot it runs `bastion_bootstrap.sh.tpl` to install the tools.
+
+```
+your laptop ──SSH :22 (your IP only)──► bastion (public subnet) ──:443──► EKS API
+                                          IAM role: read EKS + read ECR
+```
+
 > **Why** we create it and **what** we do with it is in *1.1 → The bastion*. Here is how the code builds it.
 
 ```hcl
@@ -1386,6 +1445,13 @@ output "bastion_ssh_command" {
 
 ### `bastion_bootstrap.sh.tpl`: what runs on the bastion's first boot
 
+**In simple steps:** runs **once**, automatically, when the bastion starts for the first time.
+1. Updates Ubuntu and installs basic tools (`unzip`, `curl`, `git`, `jq`…).
+2. Installs **AWS CLI v2**, **kubectl** (v1.36.0, same as the cluster), **eksctl** and **helm**.
+3. **Waits** until the EKS cluster is `ACTIVE`.
+4. Runs `aws eks update-kubeconfig` for user `ubuntu` → `kubectl` works the moment you log in.
+5. Writes everything to `/var/log/bastion-bootstrap.log`, so you can check if something failed.
+
 > `${aws_region}` and `${cluster_name}` are filled in by Terraform (`templatefile`) before the script runs.
 
 <details>
@@ -1503,6 +1569,12 @@ echo "Run: kubectl get nodes"
 
 ### `ecr.tf`: the private image registry
 
+**In simple steps:**
+1. A loop (`for_each`) creates **one ECR repository per name** in `ecr_repos`: `prod-frontend` and `prod-backend`.
+2. **`IMMUTABLE`** tags → once `v1` is pushed, it can **never** be replaced by a different image.
+3. **`scan_on_push`** → AWS scans every new image for CVEs.
+4. **`force_delete`** → `terraform destroy` works even if images are inside.
+
 ```hcl
 # ───────────────────────────────────────────────
 # ecr.tf: private image registry for the app
@@ -1535,6 +1607,11 @@ resource "aws_ecr_repository" "app" {
 ---
 
 ### `outputs.tf`: what you see after `apply`
+
+**In simple steps:**
+1. After `terraform apply`, Terraform **prints** these values on screen.
+2. The useful ones: the **bastion IP** and a ready **SSH command**, the **cluster name/endpoint**, the **VPC ID**, and the **ECR URLs**.
+3. Read one any time with `terraform output <name>`, e.g. `terraform output -raw bastion_ssh_command`.
 
 ```hcl
 # ───────────────────────────────────────────────
