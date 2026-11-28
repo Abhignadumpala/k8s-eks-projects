@@ -166,7 +166,7 @@ Our Trivy gate blocks only HIGH/CRITICAL, so it let them through.
 
 **Error** (Task 8):
 ```
-GET https://<account>.dkr.ecr.us-east-1.amazonaws.com/v2/prod-backend/manifests/sha256:...: unexpected status code 401 Unauthorized
+GET https://<account>.dkr.ecr.eu-north-1.amazonaws.com/v2/prod-backend/manifests/sha256:...: unexpected status code 401 Unauthorized
 ```
 
 **Why:** cosign reuses Docker's login from `~/.docker/config.json`. **Snap Docker** saves it in `~/snap/docker/current/.docker/config.json`, so cosign had no login.
@@ -174,7 +174,7 @@ GET https://<account>.dkr.ecr.us-east-1.amazonaws.com/v2/prod-backend/manifests/
 **Fix:** log cosign in to ECR itself:
 
 ```bash
-aws ecr get-login-password --region us-east-1 | cosign login --username AWS --password-stdin $ECR
+aws ecr get-login-password --region eu-north-1 | cosign login --username AWS --password-stdin $ECR
 ```
 
 > Also happens after **12 hours** (the ECR token expires): run it again.
@@ -190,7 +190,7 @@ aws ecr get-login-password --region us-east-1 | cosign login --username AWS --pa
 | `name unknown: The repository with name 'prod-backend' does not exist` | ECR repos don't exist (destroyed) | `terraform apply -target=aws_ecr_repository.app` (in `terraform`) |
 | `tag invalid ... already exists` | IMMUTABLE tags: `v1` is taken by a different image | Use a new tag: `v2` |
 | Trivy `exit code 1` | HIGH/CRITICAL CVE with a fix | Rebuild with `--pull` (newer base); see [#3](#3-trivy-backend-6-high-inside-npm), [#4](#4-trivy-frontend-5-critical--15-high) |
-| `$ECR` is empty / `invalid reference format` | New terminal: variables are gone | `export ECR=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com` |
+| `$ECR` is empty / `invalid reference format` | New terminal: variables are gone | `export ECR=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.eu-north-1.amazonaws.com` |
 | `cosign sign` error about an existing tag `sha256-....sig` | Signing the same digest twice in an IMMUTABLE repo (old signature format) | It is already signed: run `cosign verify` |
 
 ---

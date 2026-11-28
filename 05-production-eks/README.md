@@ -9,7 +9,7 @@ Every step explains **what** you are doing and **why**, with every piece of code
 |---|---|
 | Goal | Build a **production-grade** EKS platform and app: secure, highly available, autoscaled, monitored, deployed with GitOps |
 | App | frontend (nginx) → backend (Node.js API) → MySQL database |
-| Cloud | AWS, region `us-east-1` (N. Virginia), spread across 3 Availability Zones |
+| Cloud | AWS, region `eu-north-1` (Stockholm), spread across 3 Availability Zones |
 | Kubernetes | Amazon EKS, version **1.36** |
 | Tools | Terraform, Helm, Trivy, Cosign, Kyverno, Istio (ambient), External Secrets, Karpenter, Argo CD, Argo Rollouts, GitHub Actions, Prometheus, Grafana |
 | Level | Beginner → intermediate. You should know basic Linux commands and what a container is |

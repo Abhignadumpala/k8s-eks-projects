@@ -2,11 +2,11 @@
 # terraform.tfvars: YOUR values. This is the only file you need to edit.
 # ───────────────────────────────────────────────
 
-aws_region   = "us-east-1"
+aws_region   = "eu-north-1"
 project_name = "abhigna-prod"
 
 # Bastion
-bastion_ami_id           = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS, us-east-1
+bastion_ami_id           = "ami-01613d9e4755fbdf3" # Ubuntu 22.04 LTS, eu-north-1
 bastion_instance_type    = "m7i-flex.large"
 bastion_root_volume_size = 30
 key_pair_name            = "abhigna-eks-key" # the key pair you created (Lab Task 1)
@@ -14,7 +14,7 @@ ssh_allowed_cidr         = "0.0.0.0/0"       # safer: "<your-ip>/32"  (find it: 
 
 # Network: 3 AZs
 vpc_cidr             = "10.0.0.0/16"
-azs                  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+azs                  = ["eu-north-1a", "eu-north-1b", "eu-north-1c"]
 public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
 private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
 

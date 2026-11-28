@@ -105,19 +105,19 @@ exit
 ▶️ **Do:**
 
 ```bash
-aws elbv2 describe-load-balancers --region us-east-1 --query 'LoadBalancers[].LoadBalancerName' --output text
+aws elbv2 describe-load-balancers --region eu-north-1 --query 'LoadBalancers[].LoadBalancerName' --output text
 ```
 
 > ✅ Empty (or no `k8s-...` names).
 
 ```bash
-aws ec2 describe-volumes --region us-east-1 --filters Name=tag-key,Values=kubernetes.io/created-for/pvc/name --query 'Volumes[].[VolumeId,State]' --output text
+aws ec2 describe-volumes --region eu-north-1 --filters Name=tag-key,Values=kubernetes.io/created-for/pvc/name --query 'Volumes[].[VolumeId,State]' --output text
 ```
 
 > ✅ Empty.
 
 ```bash
-aws ec2 describe-instances --region us-east-1 --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running,pending --query 'Reservations[].Instances[].InstanceId' --output text
+aws ec2 describe-instances --region eu-north-1 --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running,pending --query 'Reservations[].Instances[].InstanceId' --output text
 ```
 
 > ✅ Empty.
@@ -149,15 +149,15 @@ cd ~/k8s-eks-projects/05-production-eks/terraform && terraform destroy
 ▶️ **Do:**
 
 ```bash
-aws eks list-clusters --region us-east-1 --output text
+aws eks list-clusters --region eu-north-1 --output text
 ```
 
 ```bash
-aws ec2 describe-instances --region us-east-1 --filters Name=instance-state-name,Values=running --query 'Reservations[].Instances[].InstanceId' --output text
+aws ec2 describe-instances --region eu-north-1 --filters Name=instance-state-name,Values=running --query 'Reservations[].Instances[].InstanceId' --output text
 ```
 
 ```bash
-aws ec2 describe-nat-gateways --region us-east-1 --filter Name=state,Values=available --query 'NatGateways[].NatGatewayId' --output text
+aws ec2 describe-nat-gateways --region eu-north-1 --filter Name=state,Values=available --query 'NatGateways[].NatGatewayId' --output text
 ```
 
 ✅ **Check:** all three print nothing (no cluster, no running instances, no NAT gateway). The hourly cost is **$0**.

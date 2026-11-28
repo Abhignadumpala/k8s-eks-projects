@@ -6,7 +6,7 @@
 variable "aws_region" {
   description = "AWS region for all resources"
   type        = string
-  default     = "us-east-1"
+  default     = "eu-north-1"
 }
 
 variable "project_name" {
@@ -19,7 +19,7 @@ variable "project_name" {
 variable "bastion_ami_id" {
   description = "Ubuntu 22.04 AMI for the bastion (region-specific)"
   type        = string
-  default     = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS, us-east-1
+  default     = "ami-01613d9e4755fbdf3" # Ubuntu 22.04 LTS, eu-north-1
 }
 
 variable "bastion_instance_type" {
@@ -56,7 +56,7 @@ variable "vpc_cidr" {
 variable "azs" {
   description = "3 Availability Zones for high availability"
   type        = list(string)
-  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  default     = ["eu-north-1a", "eu-north-1b", "eu-north-1c"]
 }
 
 variable "public_subnet_cidrs" {

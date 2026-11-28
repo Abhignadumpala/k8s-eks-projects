@@ -159,14 +159,14 @@ StatefulSet volumeClaimTemplate ──► PVC data-mysql-0 (I need 5 GiB, class 
 
 #### ⚠️ An EBS disk is stuck in one AZ
 
-**AZ (Availability Zone)** = one separate AWS data center in the region. Our cluster uses 3: `us-east-1a`, `1b`, `1c`.
+**AZ (Availability Zone)** = one separate AWS data center in the region. Our cluster uses 3: `eu-north-1a`, `1b`, `1c`.
 
 - An **EBS volume** is like a **hard disk plugged into one building**. It can only connect to a server (node) in **that same AZ**.
 - So if the `mysql-0` Pod moves (node dies, upgrade), it can only restart on a node **in the same AZ as its disk**.
 - If that whole AZ goes down, **MySQL is down** until the AZ comes back, even though the other 2 AZs are fine.
 
 ```
-us-east-1a            us-east-1b            us-east-1c
+eu-north-1a            eu-north-1b            eu-north-1c
 ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
 │ mysql-0     │       │ node ✅      │       │ node ✅      │
 │ EBS disk 💾 │  ✗──► │ can't use   │       │ can't use   │
@@ -297,7 +297,7 @@ Terraform gives the role ──► you apply the Ingress ──► controller ca
 
 ```yaml
 clusterName: abhigna-prod
-region: us-east-1
+region: eu-north-1
 replicaCount: 2
 serviceAccount:
   create: true
@@ -406,7 +406,7 @@ tolerations:
 
 ```
 {{ required "Set global.registry ..." .Values.global.registry }}/prod-backend:v1
-   → 123456789012.dkr.ecr.us-east-1.amazonaws.com/prod-backend:v1
+   → 123456789012.dkr.ecr.eu-north-1.amazonaws.com/prod-backend:v1
 ```
 
 `required` = *"if this value is empty, stop with this message"*. Better a clear error now than Pods stuck in `ImagePullBackOff` later.
@@ -571,14 +571,14 @@ echo "export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output t
 ```
 
 ```bash
-echo 'export ECR=$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com' >> ~/.bashrc
+echo 'export ECR=$ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com' >> ~/.bashrc
 ```
 
 ```bash
 source ~/.bashrc && echo $ECR
 ```
 
-✅ **Check:** prints `<your-account-id>.dkr.ecr.us-east-1.amazonaws.com`.
+✅ **Check:** prints `<your-account-id>.dkr.ecr.eu-north-1.amazonaws.com`.
 
 ---
 
@@ -595,7 +595,7 @@ helm repo add eks https://aws.github.io/eks-charts && helm repo update
 The VPC ID (the controller can't read it from IMDS):
 
 ```bash
-VPC_ID=$(aws eks describe-cluster --name abhigna-prod --region us-east-1 --query cluster.resourcesVpcConfig.vpcId --output text) && echo $VPC_ID
+VPC_ID=$(aws eks describe-cluster --name abhigna-prod --region eu-north-1 --query cluster.resourcesVpcConfig.vpcId --output text) && echo $VPC_ID
 ```
 
 ```bash
@@ -694,7 +694,7 @@ kubectl get pvc -n three-tier
 kubectl get ingress frontend -n three-tier
 ```
 
-> The `ADDRESS` is like `k8s-threetie-frontend-xxxx.us-east-1.elb.amazonaws.com`. A new ALB needs **2–3 minutes** before it answers.
+> The `ADDRESS` is like `k8s-threetie-frontend-xxxx.eu-north-1.elb.amazonaws.com`. A new ALB needs **2–3 minutes** before it answers.
 
 ```bash
 curl -s http://$(kubectl get ingress frontend -n three-tier -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')/api/health

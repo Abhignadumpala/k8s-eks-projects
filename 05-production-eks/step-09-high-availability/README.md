@@ -71,8 +71,8 @@ users ───────────────────► HPA: 2 → 6 
 
 ```
 ❌ No spread                       ✅ Spread (our setup)
-us-east-1a: backend, backend       us-east-1a: backend
-us-east-1b: —                      us-east-1b: backend
+eu-north-1a: backend, backend       eu-north-1a: backend
+eu-north-1b: —                      eu-north-1b: backend
 → 1a down = app down               → 1a down = 1b still serves
 ```
 
@@ -270,7 +270,7 @@ replicas: 2
 controller:
   env:
     - name: AWS_REGION
-      value: us-east-1
+      value: eu-north-1
   resources:
     requests: { cpu: 200m, memory: 256Mi }
     limits:   { memory: 1Gi }
@@ -684,8 +684,8 @@ kubectl delete namespace loadtest
 | HPA `TARGETS <unknown>/60%` | metrics-server not ready, or no CPU requests | Wait 1–2 min; `kubectl top pods -n three-tier` |
 | EC2NodeClass `READY False` | Subnet/SG/role not found | `kubectl describe ec2nodeclass app` → Conditions |
 | NodeClaim stays `Unknown`, log `AuthFailureServiceLinkedRoleCreationNotPermitted` | Spot service role missing | Task 2, first command |
-| Log `UnauthorizedOperation` / `AccessDenied` | Pod Identity for Karpenter missing | Laptop: `aws eks list-pod-identity-associations --cluster-name abhigna-prod --region us-east-1` must show `kube-system / karpenter`, then `kubectl rollout restart deploy/karpenter -n kube-system` |
-| New node `NotReady` / never joins | Node role access entry missing | `terraform apply` again; `aws eks list-access-entries --cluster-name abhigna-prod --region us-east-1` must include the karpenter-node role |
+| Log `UnauthorizedOperation` / `AccessDenied` | Pod Identity for Karpenter missing | Laptop: `aws eks list-pod-identity-associations --cluster-name abhigna-prod --region eu-north-1` must show `kube-system / karpenter`, then `kubectl rollout restart deploy/karpenter -n kube-system` |
+| New node `NotReady` / never joins | Node role access entry missing | `terraform apply` again; `aws eks list-access-entries --cluster-name abhigna-prod --region eu-north-1` must include the karpenter-node role |
 | `kubectl drain` waits forever | PDB blocks it (another Pod of that app isn't Ready) | Check `kubectl get pdb -n three-tier`; fix the unhealthy Pod first |
 | Karpenter node doesn't go away | Some Pod without a PDB-safe home, or `inflate` still running | `kubectl get pods -A -o wide \| grep <node>` |
 

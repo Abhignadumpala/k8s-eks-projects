@@ -6,7 +6,7 @@
 # ───────────────────────────────────────────────
 
 global:
-  # <account-id>.dkr.ecr.us-east-1.amazonaws.com  (set with --set, never commit it)
+  # <account-id>.dkr.ecr.eu-north-1.amazonaws.com  (set with --set, never commit it)
   registry: ""
 
 # Every app Pod runs on the "app" node group (label + toleration for the taint)

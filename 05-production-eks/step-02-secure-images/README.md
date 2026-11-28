@@ -507,14 +507,14 @@ export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ```
 
 ```bash
-export ECR=$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
+export ECR=$ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com
 ```
 
 | Part | Meaning |
 |---|---|
 | `export NAME=value` | Save a variable for this terminal (and programs it starts) |
 | `$(aws sts get-caller-identity --query Account --output text)` | Run the command inside `$( )` and use its output: your 12-digit AWS **account ID** |
-| `$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com` | Your ECR **registry** address (Step 01: one registry, many repositories) |
+| `$ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com` | Your ECR **registry** address (Step 01: one registry, many repositories) |
 
 ```bash
 docker build --provenance=false -t $ECR/prod-backend:v1 ./backend
@@ -588,7 +588,7 @@ echo $?
 ▶️ **Do:** log Docker in to ECR (the password is a 12-hour token from your AWS login):
 
 ```bash
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin $ECR
 ```
 
 | Part | Meaning |
@@ -612,7 +612,7 @@ docker push $ECR/prod-frontend:v1
 ✅ **Check:**
 
 ```bash
-aws ecr describe-images --repository-name prod-backend --region us-east-1 --query 'imageDetails[].imageTags' --output text
+aws ecr describe-images --repository-name prod-backend --region eu-north-1 --query 'imageDetails[].imageTags' --output text
 ```
 
 > `describe-images` lists the images in a repository. `--query` picks only the tags; `--output text` prints them plainly.
@@ -622,7 +622,7 @@ aws ecr describe-images --repository-name prod-backend --region us-east-1 --quer
 ECR also scans on push (Step 01 `scan_on_push = true`). After ~1 minute:
 
 ```bash
-aws ecr describe-image-scan-findings --repository-name prod-backend --image-id imageTag=v1 --region us-east-1 --query 'imageScanFindings.findingSeverityCounts'
+aws ecr describe-image-scan-findings --repository-name prod-backend --image-id imageTag=v1 --region eu-north-1 --query 'imageScanFindings.findingSeverityCounts'
 ```
 
 > Reads ECR's own scan result for `prod-backend:v1` and shows only the count per severity.
@@ -684,11 +684,11 @@ cat ~/.cosign/cosign.pub
 ▶️ **Do:** get the digests:
 
 ```bash
-BACKEND_DIGEST=$(aws ecr describe-images --repository-name prod-backend --image-ids imageTag=v1 --region us-east-1 --query 'imageDetails[0].imageDigest' --output text)
+BACKEND_DIGEST=$(aws ecr describe-images --repository-name prod-backend --image-ids imageTag=v1 --region eu-north-1 --query 'imageDetails[0].imageDigest' --output text)
 ```
 
 ```bash
-FRONTEND_DIGEST=$(aws ecr describe-images --repository-name prod-frontend --image-ids imageTag=v1 --region us-east-1 --query 'imageDetails[0].imageDigest' --output text)
+FRONTEND_DIGEST=$(aws ecr describe-images --repository-name prod-frontend --image-ids imageTag=v1 --region eu-north-1 --query 'imageDetails[0].imageDigest' --output text)
 ```
 
 | Part | Meaning |
@@ -706,7 +706,7 @@ echo $BACKEND_DIGEST $FRONTEND_DIGEST
 Log cosign in to ECR (needed with **snap** Docker, harmless otherwise):
 
 ```bash
-aws ecr get-login-password --region us-east-1 | cosign login --username AWS --password-stdin $ECR
+aws ecr get-login-password --region eu-north-1 | cosign login --username AWS --password-stdin $ECR
 ```
 
 > Cosign reuses Docker's login from `~/.docker/config.json`; snap Docker saves it elsewhere. Without this: `401 Unauthorized` ([Troubleshooting #7](./TROUBLESHOOTING.md#7-cosign-sign-401-unauthorized)).

@@ -74,7 +74,7 @@ abhigna-prod/three-tier/mysql ──ESO reads──► Kubernetes Secret mysql-s
 
 | Object | Meaning |
 |---|---|
-| **ClusterSecretStore** | *Where* to read: "AWS Secrets Manager in us-east-1" (usable from any namespace) |
+| **ClusterSecretStore** | *Where* to read: "AWS Secrets Manager in eu-north-1" (usable from any namespace) |
 | **ExternalSecret** | *What* to read and *which* Kubernetes Secret to create: "copy `abhigna-prod/three-tier/mysql` → `mysql-secret`" |
 | **Kubernetes Secret** | The result, used by the Pods as before. Nothing changes in the app |
 
@@ -167,11 +167,11 @@ The same 3 pieces every time:
 **eksctl:**
 
 ```bash
-eksctl create addon --cluster abhigna-prod --name eks-pod-identity-agent --region us-east-1
+eksctl create addon --cluster abhigna-prod --name eks-pod-identity-agent --region eu-north-1
 ```
 
 ```bash
-eksctl create podidentityassociation --cluster abhigna-prod --region us-east-1 --namespace media --service-account-name uploader --create-service-account --permission-policy-arns <policy-arn>
+eksctl create podidentityassociation --cluster abhigna-prod --region eu-north-1 --namespace media --service-account-name uploader --create-service-account --permission-policy-arns <policy-arn>
 ```
 
 > eksctl creates the role for you. A broad AWS-managed policy (e.g. `AmazonS3ReadOnlyAccess`) is fine for a demo only; real workloads get a small policy of their own.
@@ -179,7 +179,7 @@ eksctl create podidentityassociation --cluster abhigna-prod --region us-east-1 -
 **AWS CLI** (the role already exists):
 
 ```bash
-aws eks create-pod-identity-association --cluster-name abhigna-prod --namespace media --service-account uploader --role-arn arn:aws:iam::<account-id>:role/<role-name> --region us-east-1
+aws eks create-pod-identity-association --cluster-name abhigna-prod --namespace media --service-account uploader --role-arn arn:aws:iam::<account-id>:role/<role-name> --region eu-north-1
 ```
 
 ### IRSA, the alternative
@@ -187,11 +187,11 @@ aws eks create-pod-identity-association --cluster-name abhigna-prod --namespace 
 **Definition:** **IRSA (IAM Roles for Service Accounts)** is the **older** way to give Pods an IAM role. It links the role to the cluster's **OIDC provider** and puts the role ARN as an **annotation** on the ServiceAccount. Still needed on **Fargate**.
 
 ```bash
-eksctl utils associate-iam-oidc-provider --cluster abhigna-prod --region us-east-1 --approve
+eksctl utils associate-iam-oidc-provider --cluster abhigna-prod --region eu-north-1 --approve
 ```
 
 ```bash
-eksctl create iamserviceaccount --cluster abhigna-prod --region us-east-1 --namespace media --name uploader --attach-policy-arn <policy-arn> --approve
+eksctl create iamserviceaccount --cluster abhigna-prod --region eu-north-1 --namespace media --name uploader --attach-policy-arn <policy-arn> --approve
 ```
 
 > The first command creates the cluster's OIDC provider (our Terraform already did: `enable_irsa = true`). The second creates the role **and** the annotated ServiceAccount.
@@ -346,7 +346,7 @@ spec:
   provider:
     aws:
       service: SecretsManager
-      region: us-east-1
+      region: eu-north-1
 ```
 
 | Line | Explained |
@@ -356,7 +356,7 @@ spec:
 | no `auth:` block | Use the controller's **own** credentials = the Pod Identity role |
 
 **In simple steps:**
-1. Tells ESO **where** the secrets live: AWS **Secrets Manager** in **us-east-1**.
+1. Tells ESO **where** the secrets live: AWS **Secrets Manager** in **eu-north-1**.
 2. "Cluster" = **any namespace** can use this store.
 3. No passwords or keys here: ESO logs in to AWS with its **Pod Identity role**.
 
@@ -464,13 +464,13 @@ terraform output mysql_secret_name
 ▶️ **Do:** see the metadata (not the value):
 
 ```bash
-aws secretsmanager describe-secret --secret-id abhigna-prod/three-tier/mysql --region us-east-1 --query '{Name:Name,KMS:KmsKeyId,Created:CreatedDate}'
+aws secretsmanager describe-secret --secret-id abhigna-prod/three-tier/mysql --region eu-north-1 --query '{Name:Name,KMS:KmsKeyId,Created:CreatedDate}'
 ```
 
 See the Pod Identity associations EKS knows about:
 
 ```bash
-aws eks list-pod-identity-associations --cluster-name abhigna-prod --region us-east-1 --query 'associations[].[namespace,serviceAccount]' --output table
+aws eks list-pod-identity-associations --cluster-name abhigna-prod --region eu-north-1 --query 'associations[].[namespace,serviceAccount]' --output table
 ```
 
 ✅ **Check:** the table shows `kube-system | aws-load-balancer-controller` and `external-secrets | external-secrets`.
@@ -624,7 +624,7 @@ export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text) &
 Create the bucket and put one file in it:
 
 ```bash
-aws s3 mb s3://$BUCKET --region us-east-1
+aws s3 mb s3://$BUCKET --region eu-north-1
 ```
 
 ```bash
@@ -676,7 +676,7 @@ kubectl wait pod/awscli -n media --for=condition=Ready --timeout=120s && kubectl
 **Part C: create the association (💻 laptop)**
 
 ```bash
-aws eks create-pod-identity-association --cluster-name abhigna-prod --namespace media --service-account uploader --role-arn arn:aws:iam::$ACCOUNT_ID:role/abhigna-prod-uploader --region us-east-1
+aws eks create-pod-identity-association --cluster-name abhigna-prod --namespace media --service-account uploader --role-arn arn:aws:iam::$ACCOUNT_ID:role/abhigna-prod-uploader --region eu-north-1
 ```
 
 **Part D: recreate the Pod and test (🖥️ bastion)**
@@ -748,7 +748,7 @@ kubectl exec awscli -n media -- aws s3 ls
 > ✅ `AccessDenied` (can't even list other buckets).
 
 ```bash
-kubectl exec awscli -n media -- aws secretsmanager list-secrets --region us-east-1
+kubectl exec awscli -n media -- aws secretsmanager list-secrets --region eu-north-1
 ```
 
 > ✅ `AccessDenied`: this Pod can't see the MySQL secret.
@@ -766,7 +766,7 @@ kubectl delete namespace media
 💻 Laptop:
 
 ```bash
-aws eks delete-pod-identity-association --cluster-name abhigna-prod --region us-east-1 --association-id $(aws eks list-pod-identity-associations --cluster-name abhigna-prod --namespace media --region us-east-1 --query 'associations[0].associationId' --output text)
+aws eks delete-pod-identity-association --cluster-name abhigna-prod --region eu-north-1 --association-id $(aws eks list-pod-identity-associations --cluster-name abhigna-prod --namespace media --region eu-north-1 --query 'associations[0].associationId' --output text)
 ```
 
 ```bash
@@ -777,7 +777,7 @@ aws iam detach-role-policy --role-name abhigna-prod-uploader --policy-arn arn:aw
 aws iam delete-policy --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/abhigna-prod-uploader-s3-read && aws s3 rb s3://$BUCKET --force
 ```
 
-✅ **Check:** `aws eks list-pod-identity-associations --cluster-name abhigna-prod --region us-east-1 --query 'associations[].namespace' --output text` no longer shows `media`.
+✅ **Check:** `aws eks list-pod-identity-associations --cluster-name abhigna-prod --region eu-north-1 --query 'associations[].namespace' --output text` no longer shows `media`.
 
 🎉 **Step 06 is done.**
 
@@ -790,7 +790,7 @@ aws iam delete-policy --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/abhigna-prod-
 | ClusterSecretStore `InvalidProviderConfig` / `AccessDenied` | No Pod Identity for ESO | `aws eks list-pod-identity-associations ...` (Task 2). ServiceAccount must be `external-secrets` in namespace `external-secrets`. Restart: `kubectl rollout restart deploy/external-secrets -n external-secrets` |
 | ExternalSecret `SecretSyncedError` | Wrong secret name or property | `kubectl describe externalsecret mysql-secret -n three-tier`. Name must be `abhigna-prod/three-tier/mysql` |
 | Backend logs `Access denied for user 'appuser'` | MySQL disk still has the old password | Repeat Task 5 step 1 (scale to 0, delete PVC), then `kubectl scale statefulset mysql -n three-tier --replicas=1` |
-| `terraform apply`: `secret ... scheduled for deletion` | A secret with that name was deleted with a recovery window | `aws secretsmanager delete-secret --secret-id abhigna-prod/three-tier/mysql --force-delete-without-recovery --region us-east-1`, then apply again |
+| `terraform apply`: `secret ... scheduled for deletion` | A secret with that name was deleted with a recovery window | `aws secretsmanager delete-secret --secret-id abhigna-prod/three-tier/mysql --force-delete-without-recovery --region eu-north-1`, then apply again |
 | `Inconsistent dependency lock file` for `random` | New provider | `terraform init -upgrade` |
 | `Unable to locate credentials` in a Pod | No association for this namespace + ServiceAccount, **or** the Pod started before it | `aws eks list-pod-identity-associations ...`; then **recreate** the Pod |
 | `AccessDenied` on an action that should work | Role policy misses the action or the exact ARN (`bucket` vs `bucket/*`) | Compare the policy with the action; also check bucket policies, permissions boundaries, SCPs |

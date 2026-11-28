@@ -7,10 +7,10 @@
 **A production-grade EKS cluster**: the network, the cluster, two groups of worker machines, a bastion to manage it, and a private image registry. All of it is created by the Terraform code in [`../terraform`](../terraform).
 
 ```
-                         AWS region us-east-1
+                         AWS region eu-north-1
  ┌─────────────────────────── VPC 10.0.0.0/16 ───────────────────────────┐
  │                                                                        │
- │   AZ us-east-1a          AZ us-east-1b          AZ us-east-1c          │
+ │   AZ eu-north-1a          AZ eu-north-1b          AZ eu-north-1c          │
  │  ┌──────────────┐       ┌──────────────┐       ┌──────────────┐        │
  │  │ public subnet│       │ public subnet│       │ public subnet│        │
  │  │ bastion, NAT │       │ (load        │       │ (load        │        │
@@ -334,12 +334,12 @@ systemctl status containerd
 
 | Word | Meaning | In this lab |
 |---|---|---|
-| **Registry** | Your **one** ECR per AWS account + region | `<account-id>.dkr.ecr.us-east-1.amazonaws.com` |
+| **Registry** | Your **one** ECR per AWS account + region | `<account-id>.dkr.ecr.eu-north-1.amazonaws.com` |
 | **Repository** | A folder for **one app's images** (all its versions) | `prod-frontend`, `prod-backend` |
 | **Tag** | One version of an image | `v1`, `v2`, `v3` |
 
 ```
-<account-id>.dkr.ecr.us-east-1.amazonaws.com     ← registry (one)
+<account-id>.dkr.ecr.eu-north-1.amazonaws.com     ← registry (one)
  ├── prod-frontend                               ← repository
  │     ├── v1
  │     └── v2
@@ -348,7 +348,7 @@ systemctl status containerd
        └── v2
 ```
 
-Full image name a Pod pulls: `<account-id>.dkr.ecr.us-east-1.amazonaws.com/prod-backend:v2`
+Full image name a Pod pulls: `<account-id>.dkr.ecr.eu-north-1.amazonaws.com/prod-backend:v2`
 
 **Why one repository per app?**
 - Each app has its **own versions**: frontend on `v5`, backend on `v2`.
@@ -567,7 +567,7 @@ All the code is in [`05-production-eks/terraform/`](../terraform):
 
 **In simple steps:**
 1. Says which **Terraform version** and which **plugins (providers)** to download: AWS, Kubernetes, TLS, cloud-init, random.
-2. Sets up the **AWS provider**: region `us-east-1`, and adds the tags `Project` + `ManagedBy=terraform` to **every** resource automatically.
+2. Sets up the **AWS provider**: region `eu-north-1`, and adds the tags `Project` + `ManagedBy=terraform` to **every** resource automatically.
 3. Sets up the **Kubernetes provider**: after the cluster exists, Terraform logs in to it with a token, so it can create the bastion's ClusterRoleBinding.
 
 **Analogy 🧰:** this file picks the **toolbox** before the work starts: which tools (providers), which versions, and which site (region).
@@ -636,7 +636,7 @@ provider "kubernetes" {
 | `required_version = ">= 1.5.0"` | Terraform itself must be version 1.5 or newer |
 | `required_providers { aws, kubernetes, tls, cloudinit, random }` | Plugins to download in `terraform init`. `aws` talks to AWS, `kubernetes` talks to the cluster, `random` makes passwords (Step 06) |
 | `version = "~> 5.0"` | Any 5.x version (not 6.0), so a big new release can't break the code |
-| `provider "aws" { region = var.aws_region }` | Create everything in `us-east-1` |
+| `provider "aws" { region = var.aws_region }` | Create everything in `eu-north-1` |
 | `default_tags { Project, ManagedBy }` | Every AWS resource gets these tags automatically → easy to find, and you can see it was made by Terraform |
 | `data "aws_eks_cluster_auth" "this"` | Gets a login token for the new cluster |
 | `provider "kubernetes" { host, cluster_ca_certificate, token }` | Lets Terraform create Kubernetes objects (the bastion's RoleBinding in `eks.tf`) |
@@ -661,7 +661,7 @@ provider "kubernetes" {
 variable "aws_region" {
   description = "AWS region for all resources"
   type        = string
-  default     = "us-east-1"
+  default     = "eu-north-1"
 }
 
 variable "project_name" {
@@ -674,7 +674,7 @@ variable "project_name" {
 variable "bastion_ami_id" {
   description = "Ubuntu 22.04 AMI for the bastion (region-specific)"
   type        = string
-  default     = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS, us-east-1
+  default     = "ami-01613d9e4755fbdf3" # Ubuntu 22.04 LTS, eu-north-1
 }
 
 variable "bastion_instance_type" {
@@ -711,7 +711,7 @@ variable "vpc_cidr" {
 variable "azs" {
   description = "3 Availability Zones for high availability"
   type        = list(string)
-  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  default     = ["eu-north-1a", "eu-north-1b", "eu-north-1c"]
 }
 
 variable "public_subnet_cidrs" {
@@ -792,11 +792,11 @@ variable "ecr_repos" {
 # terraform.tfvars: YOUR values. This is the only file you need to edit.
 # ───────────────────────────────────────────────
 
-aws_region   = "us-east-1"
+aws_region   = "eu-north-1"
 project_name = "abhigna-prod"
 
 # Bastion
-bastion_ami_id           = "ami-033ea4ff4a9c726dc" # Ubuntu 22.04 LTS, us-east-1
+bastion_ami_id           = "ami-01613d9e4755fbdf3" # Ubuntu 22.04 LTS, eu-north-1
 bastion_instance_type    = "m7i-flex.large"
 bastion_root_volume_size = 30
 key_pair_name            = "abhigna-eks-key" # the key pair you created (Lab Task 1)
@@ -804,7 +804,7 @@ ssh_allowed_cidr         = "0.0.0.0/0"       # safer: "<your-ip>/32"  (find it: 
 
 # Network: 3 AZs
 vpc_cidr             = "10.0.0.0/16"
-azs                  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+azs                  = ["eu-north-1a", "eu-north-1b", "eu-north-1c"]
 public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
 private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
 
@@ -838,7 +838,7 @@ terraform.tfvars    →  "for MY project, cluster_name = abhigna-prod"     ← t
 
 | Setting | Value | What it controls |
 |---|---|---|
-| `aws_region` | `us-east-1` | Where everything is created |
+| `aws_region` | `eu-north-1` | Where everything is created |
 | `project_name` | `abhigna-prod` | Prefix for names and tags |
 | `bastion_*` | Ubuntu 22.04, `m7i-flex.large`, 30 GB | The bastion machine |
 | `key_pair_name` | `abhigna-eks-key` | The key pair you create in Lab Task 1. **Must match** |
@@ -915,7 +915,7 @@ module "vpc" {
 | `version = "~> 5.8"` | Any 5.x version from 5.8 up (not 6.0) |
 | `name = "${var.project_name}-vpc"` | The VPC is named `abhigna-prod-vpc` |
 | `cidr = var.vpc_cidr` | IP range of the whole VPC: `10.0.0.0/16` (65,536 addresses) |
-| `azs = var.azs` | Spread across `us-east-1a`, `1b`, `1c` |
+| `azs = var.azs` | Spread across `eu-north-1a`, `1b`, `1c` |
 | `public_subnets` | `10.0.1.0/24`, `10.0.2.0/24`, `10.0.3.0/24`: one public subnet per AZ |
 | `private_subnets` | `10.0.101.0/24` ...: one private subnet per AZ, for worker nodes |
 | `enable_nat_gateway = true` | Create a NAT gateway, so private nodes can reach the internet (to pull images) |
@@ -931,7 +931,7 @@ module "vpc" {
 
 **NAT gateway** = a door that lets machines in private subnets go **out** to the internet (pull images, call AWS APIs), while nobody from the internet can come **in**.
 
-- Terraform creates **1 NAT** in one public subnet (`10.0.1.0/24`, us-east-1a).
+- Terraform creates **1 NAT** in one public subnet (`10.0.1.0/24`, eu-north-1a).
 - Each private subnet has a **route table** (a signpost: "internet traffic goes here"). With `single_nat_gateway = true`, **all 3 signposts point to the same NAT**: `0.0.0.0/0 → nat-xxxx`.
 - Traffic between AZs inside one VPC is allowed, so nodes in 1b and 1c reach the NAT in 1a.
 
@@ -942,7 +942,7 @@ module "vpc" {
                  ▲
                  │
           ┌──────┴──────┐
-          │ NAT Gateway │  (public subnet, us-east-1a)
+          │ NAT Gateway │  (public subnet, eu-north-1a)
           └──────▲──────┘
      ┌───────────┼────────────┐
      │           │            │
@@ -953,7 +953,7 @@ module "vpc" {
  route table: 0.0.0.0/0 → same NAT (all 3)
 ```
 
-⚠️ **The risk:** if **us-east-1a goes down**, the NAT goes down with it. Nodes in 1b and 1c still run but **can't reach the internet** (no image pulls, no AWS API calls).
+⚠️ **The risk:** if **eu-north-1a goes down**, the NAT goes down with it. Nodes in 1b and 1c still run but **can't reach the internet** (no image pulls, no AWS API calls).
 
 | | This lab (`single_nat_gateway = true`) | Production (one NAT per AZ) |
 |---|---|---|
@@ -1767,7 +1767,7 @@ git --version
 
 > Missing one? Install guides: [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) · [Terraform](https://developer.hashicorp.com/terraform/install) · [Git](https://git-scm.com/downloads) · [VS Code](https://code.visualstudio.com/)
 
-Connect the AWS CLI to your account (only the first time). It asks for your Access Key ID, Secret Access Key, region (`us-east-1`) and output format (`json`):
+Connect the AWS CLI to your account (only the first time). It asks for your Access Key ID, Secret Access Key, region (`eu-north-1`) and output format (`json`):
 
 ```bash
 aws configure
@@ -1792,7 +1792,7 @@ aws sts get-caller-identity
 ▶️ **Do:**
 
 ```bash
-aws ec2 create-key-pair --key-name abhigna-eks-key --region us-east-1 --query 'KeyMaterial' --output text > ~/.ssh/abhigna-eks-key.pem
+aws ec2 create-key-pair --key-name abhigna-eks-key --region eu-north-1 --query 'KeyMaterial' --output text > ~/.ssh/abhigna-eks-key.pem
 ```
 
 ```bash
@@ -1805,7 +1805,7 @@ chmod 400 ~/.ssh/abhigna-eks-key.pem
 ✅ **Check:**
 
 ```bash
-aws ec2 describe-key-pairs --region us-east-1 --key-names abhigna-eks-key --query 'KeyPairs[].KeyName' --output text
+aws ec2 describe-key-pairs --region eu-north-1 --key-names abhigna-eks-key --query 'KeyPairs[].KeyName' --output text
 ```
 
 > Prints `abhigna-eks-key`.
@@ -2037,7 +2037,7 @@ kubectl get pods -n kube-system
 > ✅ `eks-pod-identity-agent-...` and `ebs-csi-...` Pods are `Running`.
 
 ```bash
-aws ecr describe-repositories --region us-east-1 --query 'repositories[].repositoryName' --output text
+aws ecr describe-repositories --region eu-north-1 --query 'repositories[].repositoryName' --output text
 ```
 
 > ✅ Prints `prod-backend    prod-frontend`.
@@ -2074,8 +2074,8 @@ terraform destroy
 | Error | Why it happens | Fix |
 |---|---|---|
 | `connection reset by peer` during `terraform init` | The download was cut off. Often an IPv6 network problem | Run `terraform init` again (2–3 times is normal; finished downloads are kept). Still failing? Try another network (e.g. phone hotspot) |
-| `InvalidKeyPair.NotFound` | `key_pair_name` doesn't exist in us-east-1 | Do Task 1, or fix `key_pair_name` in `terraform.tfvars` |
-| `Unsupported Kubernetes version` | That version isn't offered any more | Pick a `STANDARD_SUPPORT` version: `aws eks describe-cluster-versions --region us-east-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text` |
+| `InvalidKeyPair.NotFound` | `key_pair_name` doesn't exist in eu-north-1 | Do Task 1, or fix `key_pair_name` in `terraform.tfvars` |
+| `Unsupported Kubernetes version` | That version isn't offered any more | Pick a `STANDARD_SUPPORT` version: `aws eks describe-cluster-versions --region eu-north-1 --query 'clusterVersions[].[clusterVersion,versionStatus]' --output text` |
 | `VcpuLimitExceeded` | Your account's vCPU quota is too low for 5 machines | Request a quota increase in *Service Quotas*, or lower `desired`/`min` in `terraform.tfvars` |
 | `ssh: Permission denied (publickey)` | Wrong key file or wrong user | Use `-i ~/.ssh/abhigna-eks-key.pem` and user `ubuntu` |
 | `ssh: Connection timed out` | Your IP isn't allowed in `ssh_allowed_cidr` | Put your current IP from `curl -s ifconfig.me`, then `terraform apply` again |

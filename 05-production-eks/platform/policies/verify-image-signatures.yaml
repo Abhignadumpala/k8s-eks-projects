@@ -25,7 +25,7 @@ spec:
         operations: [CREATE, UPDATE]
         resources: [pods]
   matchImageReferences:
-    - glob: "*.dkr.ecr.us-east-1.amazonaws.com/prod-*"
+    - glob: "*.dkr.ecr.eu-north-1.amazonaws.com/prod-*"
   credentials:
     providers: [amazon]
   validationConfigurations:

@@ -207,7 +207,7 @@ spec:
   validations:
     - expression: >-
         variables.containers.all(c,
-          c.image.startsWith('${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/') ||
+          c.image.startsWith('${ACCOUNT_ID}.dkr.ecr.eu-north-1.amazonaws.com/') ||
           c.image.startsWith('public.ecr.aws/docker/library/'))
       message: "Images must come from our ECR ... or public.ecr.aws/docker/library."
 ```
@@ -228,7 +228,7 @@ spec:
 4. **All pass** → Pod allowed. **One fails** → Pod refused with the message (`Deny`).
 
 ```
-image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/prod-backend:v1  ✅ our ECR
+image: 123456789012.dkr.ecr.eu-north-1.amazonaws.com/prod-backend:v1  ✅ our ECR
 image: public.ecr.aws/docker/library/mysql:8.4                        ✅ official mirror
 image: nginx:1.27   (Docker Hub)                                       ❌ refused
 ```
@@ -305,7 +305,7 @@ spec:
     timeoutSeconds: 15
   matchConstraints: ...             # same as above: Pods in three-tier
   matchImageReferences:
-    - glob: "*.dkr.ecr.us-east-1.amazonaws.com/prod-*"
+    - glob: "*.dkr.ecr.eu-north-1.amazonaws.com/prod-*"
   credentials:
     providers: [amazon]
   validationConfigurations:
@@ -338,7 +338,7 @@ spec:
 | `verifyImageSignatures(...) > 0` | At least one valid signature from our key |
 
 **In simple steps:**
-1. **Which images?** Only **our** app images: `*.dkr.ecr.us-east-1.amazonaws.com/prod-*`.
+1. **Which images?** Only **our** app images: `*.dkr.ecr.eu-north-1.amazonaws.com/prod-*`.
 2. Kyverno **logs in to ECR** with its own Pod Identity role (`providers: [amazon]`).
 3. It **downloads the signature** stored next to the image (from Step 02 or CI).
 4. It **checks** the signature with **your public key** (`cosign.pub`, pasted in the policy).
@@ -561,11 +561,11 @@ kubectl get imagevalidatingpolicies
 ▶️ **Do (💻 laptop):** build an image that is **different** (new digest) and push it **without** signing:
 
 ```bash
-cd ~/k8s-eks-projects/05-production-eks/app && export ECR=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
+cd ~/k8s-eks-projects/05-production-eks/app && export ECR=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.eu-north-1.amazonaws.com
 ```
 
 ```bash
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin $ECR
 ```
 
 ```bash

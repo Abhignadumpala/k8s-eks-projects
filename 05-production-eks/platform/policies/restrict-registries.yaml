@@ -26,6 +26,6 @@ spec:
   validations:
     - expression: >-
         variables.containers.all(c,
-          c.image.startsWith('${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/') ||
+          c.image.startsWith('${ACCOUNT_ID}.dkr.ecr.eu-north-1.amazonaws.com/') ||
           c.image.startsWith('public.ecr.aws/docker/library/'))
-      message: "Images must come from our ECR (${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com) or public.ecr.aws/docker/library."
+      message: "Images must come from our ECR (${ACCOUNT_ID}.dkr.ecr.eu-north-1.amazonaws.com) or public.ecr.aws/docker/library."

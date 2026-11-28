@@ -18,7 +18,7 @@ set -euo pipefail
 STEP="${1:?Usage: rebuild.sh <last step you finished: 3 to 11>}"
 ROOT="$HOME/k8s-eks-projects/05-production-eks"
 CLUSTER=abhigna-prod
-REGION=us-east-1
+REGION=eu-north-1
 : "${ACCOUNT_ID:?ACCOUNT_ID is empty. Run: source ~/.bashrc  (Step 03, Task 2)}"
 ECR="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 

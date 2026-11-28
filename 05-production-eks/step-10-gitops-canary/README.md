@@ -293,7 +293,7 @@ spec:
         - ../../gitops/values-prod.yaml
       parameters:
         - name: global.registry
-          value: ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+          value: ${ACCOUNT_ID}.dkr.ecr.eu-north-1.amazonaws.com
   destination:
     server: https://kubernetes.default.svc
     namespace: three-tier
@@ -341,7 +341,7 @@ permissions:
   id-token: write     # get the GitHub OIDC token for AWS
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-north-1
   APP_DIR: 05-production-eks/app
 
 concurrency:
@@ -449,7 +449,7 @@ jobs:
 | `matrix.service` | One job definition builds frontend and backend in parallel |
 | `${GITHUB_SHA::7}` | Bash: first 7 characters of the commit = the tag |
 | `configure-aws-credentials` + `role-to-assume` | OIDC login, no keys |
-| `amazon-ecr-login` → `outputs.registry` | `<account>.dkr.ecr.us-east-1.amazonaws.com`, read at run time |
+| `amazon-ecr-login` → `outputs.registry` | `<account>.dkr.ecr.eu-north-1.amazonaws.com`, read at run time |
 | Trivy **before** Push | A vulnerable image never reaches ECR |
 | `docker inspect ... RepoDigests` | After the push, the exact `image@sha256:...` to sign |
 | `--key env://COSIGN_PRIVATE_KEY` | Cosign reads the key from the env var (from GitHub secrets, never written to disk) |

@@ -26,7 +26,7 @@ spec:
       message: "Do not put static AWS access keys in Pods. Use EKS Pod Identity."
     - expression: >-
         object.spec.containers.all(c,
-          c.image.startsWith('${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/') ||
+          c.image.startsWith('${ACCOUNT_ID}.dkr.ecr.eu-north-1.amazonaws.com/') ||
           c.image.startsWith('public.ecr.aws/docker/library/'))
       message: "Images must come from our ECR or public.ecr.aws/docker/library."
     - expression: >-
